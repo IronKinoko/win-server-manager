@@ -1,0 +1,52 @@
+/* ==================== 拖拽调整终端大小 ==================== */
+
+.resize-handle {
+  height: 5px;
+  background: var(--border);
+  cursor: row-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.resize-handle:hover {
+  background: var(--accent);
+}
+
+/* ==================== 输出区 ==================== */
+
+.output {
+  margin: 0;
+  padding: 12px 20px;
+  background: #0d0f13;
+  color: #c9d1d9;
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex-shrink: 0;
+}
+
+.output .out-stderr {
+  display: block;
+  color: #f85149;
+}
+
+.output .out-stderr::before {
+  content: '[stderr] ';
+  color: #8b3a36;
+}
+
+.output .out-stdout {
+  display: block;
+}
+
+.output .out-stdout::before {
+  content: '[stdout] ';
+  color: #4a5568;
+}
+
+.output .out-empty {
+  color: #4a5568;
+}
