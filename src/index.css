@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #16181d;
+  --color-panel: #1e2128;
+  --color-input-bg: #262a33;
+  --color-line: #2e333d;
+  --color-fg: #e5e7eb;
+  --color-fg-muted: #8b93a1;
+  --color-accent: #3b82f6;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-idle: #6b7280;
+  --font-sans: 'Segoe UI', 'Microsoft YaHei', Inter, Avenir, Helvetica, Arial, sans-serif;
+  --font-mono: 'Cascadia Code', Consolas, 'Courier New', monospace;
+}
+
+/* ==================== 通用输入框（复用模式多，用 component layer）==================== */
+
+@layer components {
+  .field-input {
+    @apply bg-input-bg border border-line rounded-md text-fg px-2.5 py-[7px] text-[13px] outline-none w-full focus:border-accent;
+  }
+
+  .btn-base {
+    @apply bg-input-bg border border-line rounded-md text-fg px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-[#2f3440] disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-accent border-accent text-white rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-blue-600 disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply bg-danger/10 border-danger/60 text-danger rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-danger/25 hover:border-danger disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+
+  .btn-start {
+    @apply bg-success/15 border-success/60 text-success rounded-md px-3.5 py-[7px] text-[13px] font-semibold cursor-pointer transition-colors hover:bg-success/30 hover:border-success disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+
+  .btn-stop {
+    @apply bg-danger border-danger text-white font-semibold rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+}
+
+/* ==================== Toggle Switch（伪元素无法用 utility 实现）==================== */
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--color-idle);
+  border-radius: 22px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.switch-slider::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.switch input:checked + .switch-slider {
+  background: var(--color-accent);
+}
+
+.switch input:checked + .switch-slider::before {
+  transform: translateX(18px);
+}
+
+/* ==================== 输出行（动态 HTML，无法用 utility class）==================== */
+
+.out-stderr {
+  display: block;
+  color: #f85149;
+}
+
+.out-stderr::before {
+  content: '[stderr] ';
+  color: #d4736e;
+}
+
+.out-stdout {
+  display: block;
+}
+
+.out-stdout::before {
+  content: '[stdout] ';
+  color: #7a8a9e;
+}
+
+.out-empty {
+  color: #5e6e82;
+}
+
+/* ==================== 滚动条 ==================== */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333a46;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #414a59;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

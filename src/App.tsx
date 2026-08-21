@@ -8,12 +8,43 @@ import Sidebar from './components/Sidebar'
 import TaskForm from './components/TaskForm'
 import ControlBar from './components/ControlBar'
 import OutputPanel from './components/OutputPanel'
-import SettingsModal from './components/SettingsModal'
-import './App.css'
+import SettingsModal, { type SettingsModalHandle } from './components/SettingsModal'
 
 const MAX_OUTPUT_LINES = 500
 const ansi = new AnsiUp()
 ansi.escape_html = true
+
+// 覆盖默认配色为 Windows Console 深色背景下的标准值
+;(ansi as any).ansi_colors = [
+  // Normal (30-37)
+  [
+    { rgb: [0, 0, 0], class_name: 'ansi-black' },
+    { rgb: [205, 49, 49], class_name: 'ansi-red' },
+    { rgb: [13, 188, 121], class_name: 'ansi-green' },
+    { rgb: [229, 231, 16], class_name: 'ansi-yellow' },
+    { rgb: [51, 153, 255], class_name: 'ansi-blue' },
+    { rgb: [188, 63, 188], class_name: 'ansi-magenta' },
+    { rgb: [17, 168, 205], class_name: 'ansi-cyan' },
+    { rgb: [204, 204, 204], class_name: 'ansi-white' },
+  ],
+  // Bright (90-97)
+  [
+    { rgb: [118, 118, 118], class_name: 'ansi-bright-black' },
+    { rgb: [231, 72, 86], class_name: 'ansi-bright-red' },
+    { rgb: [49, 221, 185], class_name: 'ansi-bright-green' },
+    { rgb: [240, 230, 140], class_name: 'ansi-bright-yellow' },
+    { rgb: [74, 166, 255], class_name: 'ansi-bright-blue' },
+    { rgb: [234, 92, 236], class_name: 'ansi-bright-magenta' },
+    { rgb: [53, 196, 231], class_name: 'ansi-bright-cyan' },
+    { rgb: [255, 255, 255], class_name: 'ansi-bright-white' },
+  ],
+]
+// 同步更新 256 色板的前 16 项
+const palette: any[] = (ansi as any).palette_256
+for (let i = 0; i < 16 && i < palette.length; i++) {
+  const src = i < 8 ? (ansi as any).ansi_colors[0][i] : (ansi as any).ansi_colors[1][i - 8]
+  palette[i] = { ...palette[i], rgb: [...src.rgb], class_name: src.class_name }
+}
 
 function App() {
   const [tasks, setTasks] = useState<TaskInfo[]>([])
@@ -22,8 +53,7 @@ function App() {
   const [form, setForm] = useState<Task | null>(null)
   const [dirty, setDirty] = useState(false)
   const outputRef = useRef<HTMLDivElement>(null)
-  const [showSettings, setShowSettings] = useState(false)
-  const [autoStart, setAutoStart] = useState(() => localStorage.getItem('autostart') === 'true')
+  const settingsRef = useRef<SettingsModalHandle>(null)
 
   // 终端区域高度（所有任务通用，持久化到 localStorage）
   const [terminalHeight, setTerminalHeight] = useState<number>(() => {
@@ -213,18 +243,18 @@ function App() {
   }
 
   return (
-    <div className="app">
+    <div className="flex h-screen bg-surface text-fg font-sans">
       <Sidebar
         tasks={tasks}
         selectedId={selectedId}
         onSelect={selectTask}
         onAdd={handleAdd}
-        onOpenSettings={() => setShowSettings(true)}
+        onOpenSettings={() => settingsRef.current?.open()}
       />
 
-      <main className="main">
+      <main className="flex flex-col flex-1 min-w-0">
         {!form || !selected ? (
-          <div className="placeholder">
+          <div className="flex flex-1 items-center justify-center text-fg-muted">
             <p>从左侧选择任务，或点击「添加任务」创建新任务</p>
           </div>
         ) : (
@@ -255,15 +285,7 @@ function App() {
         )}
       </main>
 
-      <SettingsModal
-        show={showSettings}
-        onClose={() => setShowSettings(false)}
-        autoStart={autoStart}
-        onAutoStartChange={(v) => {
-          setAutoStart(v)
-          localStorage.setItem('autostart', String(v))
-        }}
-      />
+      <SettingsModal ref={settingsRef} />
     </div>
   )
 }
