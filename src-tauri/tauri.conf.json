@@ -14,7 +14,8 @@
       {
         "title": "Windows 服务管理器",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "visible": false
       }
     ],
     "trayIcon": {

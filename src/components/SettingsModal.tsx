@@ -1,4 +1,5 @@
-import { forwardRef, useImperativeHandle, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 
 export interface SettingsModalHandle {
   open: () => void
@@ -6,7 +7,15 @@ export interface SettingsModalHandle {
 
 const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_props, ref) {
   const [visible, setVisible] = useState(false)
-  const [autoStart, setAutoStart] = useState(() => localStorage.getItem('autostart') === 'true')
+  const [autoStart, setAutoStart] = useState(false)
+  const [autoRestore, setAutoRestore] = useState(false)
+  const [silentStart, setSilentStart] = useState(false)
+
+  useEffect(() => {
+    invoke<boolean>('get_setting_auto_restore').then(setAutoRestore).catch(() => {})
+    invoke<boolean>('get_setting_silent_start').then(setSilentStart).catch(() => {})
+    invoke<boolean>('get_autostart').then(setAutoStart).catch(() => {})
+  }, [])
 
   useImperativeHandle(ref, () => ({
     open: () => setVisible(true),
@@ -14,7 +23,17 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
 
   const toggleAutoStart = (v: boolean) => {
     setAutoStart(v)
-    localStorage.setItem('autostart', String(v))
+    invoke('set_autostart', { value: v }).catch(() => {})
+  }
+
+  const toggleAutoRestore = (v: boolean) => {
+    setAutoRestore(v)
+    invoke('set_setting_auto_restore', { value: v }).catch(() => {})
+  }
+
+  const toggleSilentStart = (v: boolean) => {
+    setSilentStart(v)
+    invoke('set_setting_silent_start', { value: v }).catch(() => {})
   }
 
   if (!visible) return null
@@ -35,13 +54,50 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
           </button>
         </div>
         <div className="p-4 flex flex-col gap-3.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[13px] text-fg">允许开机自启</span>
-            <label className="switch">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-[13px] text-fg">开机自启</span>
+              <span className="text-xs text-fg-muted leading-snug">
+                登录 Windows 后自动启动本应用
+              </span>
+            </div>
+            <label className="switch shrink-0">
               <input
                 type="checkbox"
                 checked={autoStart}
                 onChange={(e) => toggleAutoStart(e.target.checked)}
+              />
+              <span className="switch-slider" />
+            </label>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-[13px] text-fg">自动恢复任务</span>
+              <span className="text-xs text-fg-muted leading-snug">
+                退出时停止全部运行中的任务，重新打开应用后自动恢复它们
+              </span>
+            </div>
+            <label className="switch shrink-0">
+              <input
+                type="checkbox"
+                checked={autoRestore}
+                onChange={(e) => toggleAutoRestore(e.target.checked)}
+              />
+              <span className="switch-slider" />
+            </label>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-[13px] text-fg">静默启动</span>
+              <span className="text-xs text-fg-muted leading-snug">
+                启动后不显示主窗口，直接进入系统托盘
+              </span>
+            </div>
+            <label className="switch shrink-0">
+              <input
+                type="checkbox"
+                checked={silentStart}
+                onChange={(e) => toggleSilentStart(e.target.checked)}
               />
               <span className="switch-slider" />
             </label>

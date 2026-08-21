@@ -42,6 +42,9 @@ export default function TaskForm({
             浏览…
           </button>
         </div>
+        <span className="text-[11px] text-fg-muted">
+          支持完整命令（如 node D:\AI\server.js），仅写名称时自动搜索 PATH
+        </span>
       </div>
       <div className="flex flex-col gap-1.5">
         <label className="text-xs text-fg-muted">

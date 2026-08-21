@@ -114,8 +114,26 @@ function App() {
 
   // 加载任务列表 + 监听后端事件
   useEffect(() => {
-    refreshTasks()
     let cancelled = false
+    refreshTasks().then(async (list) => {
+      // 自动恢复：若设置开启，重启上次退出前正在运行中的任务
+      // （StrictMode 下 effect 可能执行两次，cancelled 保证只有一条恢复链路生效）
+      try {
+        if (cancelled) return
+        const autoRestore = await invoke<boolean>('get_setting_auto_restore')
+        if (!autoRestore) return
+        const ids = await invoke<string[]>('get_running_task_ids')
+        for (const id of ids) {
+          if (cancelled) break
+          const t = list.find((x) => x.task.id === id)
+          if (t && t.status !== 'running') {
+            await invoke('start_task', { id }).catch(() => {})
+          }
+        }
+      } catch {
+        // 自动恢复失败不影响正常使用
+      }
+    })
     const unlisteners: Array<() => void> = []
     const track = (fn: () => void) => {
       if (cancelled) { fn(); return }
@@ -214,7 +232,16 @@ function App() {
   const handleStart = async () => {
     if (!selected) return
     if (dirty && form) await handleSave()
-    await invoke('start_task', { id: selected.task.id })
+    const id = selected.task.id
+    try {
+      await invoke('start_task', { id })
+    } catch (e) {
+      // 启动失败（如可执行文件不存在）：把后端返回的错误显示到该任务的输出区
+      setOutputs((prev) => ({
+        ...prev,
+        [id]: [...(prev[id] ?? []), `[错误] ${String(e)}`].slice(-MAX_OUTPUT_LINES),
+      }))
+    }
   }
 
   const handleStop = async () => {

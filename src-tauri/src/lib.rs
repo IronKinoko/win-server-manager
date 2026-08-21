@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,6 +60,15 @@ pub struct StatusEvent {
     pub status: TaskStatus,
 }
 
+// 应用级设置（settings.json）
+#[derive(Serialize, Deserialize, Clone)]
+struct AppSettings {
+    #[serde(default)]
+    auto_restore: bool,
+    #[serde(default)]
+    silent_start: bool,
+}
+
 // ==================== 任务管理器 ====================
 
 struct TaskState {
@@ -71,6 +80,8 @@ struct TaskState {
 pub struct TaskManager {
     tasks: Mutex<HashMap<String, Task>>,
     states: Mutex<HashMap<String, TaskState>>,
+    // 正在启动中的任务集合：原子抢占，防止并发调用导致同一任务被启动两次
+    starting: Mutex<HashSet<String>>,
     data_dir: PathBuf,
 }
 
@@ -79,10 +90,30 @@ impl TaskManager {
         let tm = Self {
             tasks: Mutex::new(HashMap::new()),
             states: Mutex::new(HashMap::new()),
+            starting: Mutex::new(HashSet::new()),
             data_dir,
         };
         tm.load_tasks();
         tm
+    }
+
+    /// 尝试占用某任务的启动槽位；任务已在运行或正在启动时返回 false
+    fn try_begin_start(&self, id: &str) -> bool {
+        let running = self
+            .states
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|s| s.status == TaskStatus::Running)
+            .unwrap_or(false);
+        if running {
+            return false;
+        }
+        self.starting.lock().unwrap().insert(id.to_string())
+    }
+
+    fn end_start(&self, id: &str) {
+        self.starting.lock().unwrap().remove(id);
     }
 
     fn load_tasks(&self) {
@@ -105,6 +136,65 @@ impl TaskManager {
         let vec: Vec<&Task> = tasks.values().collect();
         if let Ok(json) = serde_json::to_string_pretty(&vec) {
             let _ = std::fs::write(&path, json);
+        }
+    }
+
+    // ---- 设置持久化（settings.json）----
+
+    fn load_settings(&self) -> AppSettings {
+        let path = self.data_dir.join("settings.json");
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(s) = serde_json::from_str::<AppSettings>(&content) {
+                    return s;
+                }
+            }
+        }
+        AppSettings {
+            auto_restore: false,
+            silent_start: false,
+        }
+    }
+
+    fn save_settings(&self, s: &AppSettings) {
+        let path = self.data_dir.join("settings.json");
+        if let Ok(json) = serde_json::to_string_pretty(s) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+
+    // ---- 运行中任务快照（running_tasks.json，用于退出/重开后恢复）----
+
+    fn load_running_ids(&self) -> Vec<String> {
+        let path = self.data_dir.join("running_tasks.json");
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(ids) = serde_json::from_str::<Vec<String>>(&content) {
+                    return ids;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// 将当前运行中的任务 ID 集合落盘（在状态变化点调用；启动时不要调用，避免覆盖上次快照）。
+    /// 退出流程中（QUITTING）必须跳过：退出前已记录好快照，随后逐任务停止，
+    /// 若继续写入会把快照覆盖成空集，导致下次启动无任务可恢复。
+    fn sync_running_set(&self) {
+        if QUITTING.load(Ordering::SeqCst) {
+            return;
+        }
+        let ids: Vec<String> = {
+            let states = self.states.lock().unwrap();
+            states
+                .iter()
+                .filter(|(_, s)| s.status == TaskStatus::Running)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        let path = self.data_dir.join("running_tasks.json");
+        if let Ok(json) = serde_json::to_string(&ids) {
+            let _ = std::fs::write(path, json);
         }
     }
 
@@ -155,14 +245,36 @@ fn decode_output(bytes: &[u8]) -> String {
     s.to_string()
 }
 
+// 同步杀死进程树并确认其真正终止。
+// 注意必须等待完成：退出流程结束后会立即 app.exit(0)，
+// 若 fire-and-forget（仅 spawn 不等待），taskkill 可能来不及执行完，残留进程会继续占用端口等。
 fn kill_process_tree(pid: u32) {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
+        const NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags(0x08000000)
-            .spawn();
+            .creation_flags(NO_WINDOW)
+            .output();
+        // 最多等约 3 秒确认进程已终止
+        for _ in 0..30 {
+            if !is_pid_alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        // 超时则再强制一次并继续等待
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(NO_WINDOW)
+            .output();
+        for _ in 0..30 {
+            if !is_pid_alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -170,6 +282,27 @@ fn kill_process_tree(pid: u32) {
             .args(["-9", &format!("-{}", pid)])
             .spawn();
     }
+}
+
+#[cfg(target_os = "windows")]
+fn is_pid_alive(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    let output = match std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .creation_flags(0x08000000)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    let text = decode_output(&output.stdout);
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 2 && fields[1] == pid.to_string() {
+            return true;
+        }
+    }
+    false
 }
 
 // 启动前检查是否有来自同一文件的同名进程在运行，若有则终止，保证单实例
@@ -249,17 +382,82 @@ fn kill_same_name_processes(exe_path: &str) -> bool {
 
 // ==================== 核心启动逻辑 ====================
 
+// 按空白拆分命令行，保留双引号内的内容（简化版 CommandLineToArgvW 语义，不处理转义符）
+fn parse_command_line(cmdline: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for ch in cmdline.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+// 在 PATH 中查找可执行文件
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var("PATH").ok()?;
+    for dir in std::env::split_paths(&path_var) {
+        for candidate in [name.to_string(), format!("{}.exe", name)] {
+            let p = dir.join(candidate.as_str());
+            if p.is_file() {
+                return std::fs::canonicalize(&p).ok();
+            }
+        }
+    }
+    None
+}
+
+// 解析任务的「可执行文件」字段，支持三种写法：
+//   1. 绝对/相对路径：C:\server\app.exe
+//   2. 仅名称（自动搜索 PATH）：node
+//   3. 完整命令行（首个 token 为程序，其余并入参数）：node "D:\AI\server.js"
+// 返回 (程序路径, 从命令行解析出的附加参数)
+fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("可执行文件为空".into());
+    }
+    // 整个字符串就是有效路径时直接使用
+    if let Ok(p) = std::fs::canonicalize(trimmed) {
+        return Ok((p, vec![]));
+    }
+    let tokens = parse_command_line(trimmed);
+    let head = tokens[0].clone();
+    let rest = tokens[1..].to_vec();
+    let program = if head.contains('\\') || head.contains('/') {
+        // 带路径分隔符：只按路径解析
+        std::fs::canonicalize(&head).ok()
+    } else {
+        // 纯名称：优先当前目录下的本地文件，再搜 PATH
+        std::fs::canonicalize(&head).ok().or_else(|| find_in_path(&head))
+    };
+    match program {
+        Some(p) => Ok((p, rest)),
+        None => Err(if rest.is_empty() {
+            format!("可执行文件不存在: {}", head)
+        } else {
+            format!("找不到可执行文件 {}（不在当前目录也不在 PATH 中）", head)
+        }),
+    }
+}
+
 fn do_start_task(
     app: &AppHandle,
     tm: &Arc<TaskManager>,
     task: &Task,
 ) -> Result<u32, String> {
-    let exe_path = match std::fs::canonicalize(&task.exe_path) {
-        Ok(path) => path,
-        Err(_) => {
-            return Err(format!("可执行文件不存在: {}", task.exe_path));
-        }
-    };
+    let (exe_path, extra_args) = resolve_command(&task.exe_path)?;
 
     // 每次启动清空该任务的日志与前端输出，保证输出区只反映本次运行
     {
@@ -273,8 +471,8 @@ fn do_start_task(
         serde_json::json!({ "task_id": task.id }),
     );
 
-    // 启动前清理同名进程，保证单实例
-    if kill_same_name_processes(&task.exe_path) {
+    // 启动前清理同名进程，保证单实例（按解析出的真实程序路径判断）
+    if kill_same_name_processes(exe_path.to_string_lossy().as_ref()) {
         let _ = app.emit(
             "task-output",
             OutputEvent {
@@ -282,7 +480,7 @@ fn do_start_task(
                 source: "stderr".into(),
                 text: format!(
                     "[单实例] 检测到同名进程 {} 正在运行，已终止旧实例\n",
-                    Path::new(&task.exe_path)
+                    exe_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("?")
@@ -303,11 +501,9 @@ fn do_start_task(
     };
     cmd.current_dir(working_dir);
 
-    let args: Vec<String> = task
-        .arguments
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    // 参数 = 专用参数框的内容（同样做引号感知的拆分）+「可执行文件」里附带的命令行参数
+    let mut args: Vec<String> = parse_command_line(&task.arguments);
+    args.extend(extra_args);
     cmd.args(&args);
 
     for env in &task.env_vars {
@@ -337,7 +533,9 @@ fn do_start_task(
         state.status = TaskStatus::Running;
         state.pid = Some(pid);
         state.stop_tx = Some(stop_tx);
+        drop(states);
     }
+    tm.sync_running_set();
 
     let _ = app.emit(
         "task-status",
@@ -533,6 +731,7 @@ fn do_start_task(
 
             if stop_requested {
                 tm.set_status(&id, TaskStatus::Stopped, None);
+                tm.sync_running_set();
                 let _ = app.emit(
                     "task-status",
                     StatusEvent {
@@ -543,6 +742,7 @@ fn do_start_task(
             } else if let Ok(status) = exit_status {
                 if status.success() {
                     tm.set_status(&id, TaskStatus::Stopped, None);
+                    tm.sync_running_set();
                     let _ = app.emit(
                         "task-status",
                         StatusEvent {
@@ -552,6 +752,7 @@ fn do_start_task(
                     );
                 } else {
                     tm.set_status(&id, TaskStatus::Crashed, None);
+                    tm.sync_running_set();
                     let _ = app.emit(
                         "task-status",
                         StatusEvent {
@@ -666,6 +867,8 @@ fn delete_task(state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), Str
 
     let mut states = state.states.lock().unwrap();
     states.remove(&id);
+    drop(states);
+    state.sync_running_set();
 
     Ok(())
 }
@@ -682,16 +885,13 @@ async fn start_task(
         tasks.get(&id).cloned().ok_or("任务不存在")?
     };
 
-    {
-        let states = tm.states.lock().unwrap();
-        if let Some(s) = states.get(&id) {
-            if s.status == TaskStatus::Running {
-                return Err("任务已在运行中".into());
-            }
-        }
+    // 原子抢占启动槽位：任务已在运行或已有并发启动在进行时直接拒绝，避免同一任务被拉起两个进程
+    if !tm.try_begin_start(&id) {
+        return Err("任务已在运行中".into());
     }
-
-    do_start_task(&app, &tm, &task)
+    let result = do_start_task(&app, &tm, &task);
+    tm.end_start(&id);
+    result
 }
 
 #[tauri::command]
@@ -714,6 +914,7 @@ fn stop_task(
     }
 
     tm.set_status(&id, TaskStatus::Stopped, None);
+    tm.sync_running_set();
     let _ = app.emit(
         "task-status",
         StatusEvent {
@@ -753,6 +954,7 @@ fn stop_all_tasks(app: &AppHandle, tm: &Arc<TaskManager>) {
             },
         );
     }
+    tm.sync_running_set();
 }
 
 #[tauri::command]
@@ -770,6 +972,83 @@ fn clear_task_log(state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), 
     Ok(())
 }
 
+// ---- 设置与运行快照 ----
+
+#[tauri::command]
+fn get_setting_auto_restore(state: State<'_, Arc<TaskManager>>) -> bool {
+    state.load_settings().auto_restore
+}
+
+#[tauri::command]
+fn set_setting_auto_restore(state: State<'_, Arc<TaskManager>>, value: bool) {
+    let mut s = state.load_settings();
+    s.auto_restore = value;
+    state.save_settings(&s);
+}
+
+#[tauri::command]
+fn get_setting_silent_start(state: State<'_, Arc<TaskManager>>) -> bool {
+    state.load_settings().silent_start
+}
+
+#[tauri::command]
+fn set_setting_silent_start(state: State<'_, Arc<TaskManager>>, value: bool) {
+    let mut s = state.load_settings();
+    s.silent_start = value;
+    state.save_settings(&s);
+}
+
+// ---- 开机自启（HKCU\...\Run 注册表项）----
+
+#[cfg(target_os = "windows")]
+const AUTOSTART_REG_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(target_os = "windows")]
+const AUTOSTART_REG_NAME: &str = "win-server-manager";
+
+#[tauri::command]
+fn get_autostart() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+        let reg = winreg::RegKey::predef(HKEY_CURRENT_USER);
+        match reg.open_subkey_with_flags(AUTOSTART_REG_KEY, KEY_READ) {
+            Ok(run) => run
+                .get_value::<String, _>(AUTOSTART_REG_NAME)
+                .map_or(false, |v| !v.trim().is_empty()),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+fn set_autostart(value: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
+        let reg = winreg::RegKey::predef(HKEY_CURRENT_USER);
+        let Ok((run, _)) = reg.create_subkey_with_flags(AUTOSTART_REG_KEY, KEY_WRITE) else {
+            return;
+        };
+        if value {
+            if let Ok(exe) = std::env::current_exe() {
+                // 路径带引号，兼容含空格/中文的安装目录
+                let _ = run.set_value(AUTOSTART_REG_NAME, &format!("\"{}\"", exe.display()));
+            }
+        } else {
+            let _ = run.delete_value(AUTOSTART_REG_NAME);
+        }
+    }
+}
+
+#[tauri::command]
+fn get_running_task_ids(state: State<'_, Arc<TaskManager>>) -> Vec<String> {
+    state.load_running_ids()
+}
+
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -785,6 +1064,14 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).ok();
             let task_manager = Arc::new(TaskManager::new(data_dir));
             app.manage(task_manager.clone());
+
+            // 窗口配置为创建时不可见，避免静默启动时闪现：
+            // 非静默 → 立即显示；静默 → 保持隐藏，驻留托盘（左键单击随时唤回）
+            if !task_manager.load_settings().silent_start {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
 
             // 托盘图标在 tauri.conf.json 的 app.trayIcon 中定义，这里为其设置右键菜单
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
@@ -830,10 +1117,14 @@ pub fn run() {
                     }
                 }
                 "quit" => {
-                    // 退出：停止所有任务后退出应用
+                    // 退出：若开启「自动恢复任务」则保留运行快照并停止全部任务，下次启动时恢复；
+                    // 关闭时不停止进程（任务继续在后台运行），也不做恢复
                     QUITTING.store(true, Ordering::SeqCst);
                     if let Some(tm) = app.try_state::<Arc<TaskManager>>() {
-                        stop_all_tasks(app, &tm);
+                        if tm.load_settings().auto_restore {
+                            tm.sync_running_set();
+                            stop_all_tasks(app, &tm);
+                        }
                     }
                     app.exit(0);
                 }
@@ -848,7 +1139,14 @@ pub fn run() {
             start_task,
             stop_task,
             get_task_log,
-            clear_task_log
+            clear_task_log,
+            get_setting_auto_restore,
+            set_setting_auto_restore,
+            get_setting_silent_start,
+            set_setting_silent_start,
+            get_autostart,
+            set_autostart,
+            get_running_task_ids
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
