@@ -30,7 +30,7 @@ export default function Sidebar({
   const sorted = [...tasks].sort((a, b) => a.task.name.localeCompare(b.task.name, 'zh-Hans-CN'))
   return (
     <aside className="w-[280px] min-w-[280px] bg-panel border-r border-line flex flex-col">
-      <div className="p-3.5 border-b border-line flex flex-col gap-2.5">
+      <div className="p-4 border-b border-line flex flex-col gap-3">
         <h1 className="m-0 text-base font-semibold">服务管理器</h1>
         <button className="btn-primary" onClick={onAdd}>
           + 添加任务
@@ -42,12 +42,12 @@ export default function Sidebar({
           return (
             <li
               key={t.task.id}
-              className={`flex items-center gap-2 px-2.5 py-[9px] rounded-md cursor-pointer select-none transition-colors ${
+              className={`flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer select-none transition-colors ${
                 t.task.id === selectedId ? 'bg-accent/[0.18]' : 'hover:bg-white/5'
               }`}
               onClick={() => onSelect(t.task.id)}
             >
-              <span className={`w-[9px] h-[9px] rounded-full shrink-0 ${si.dot}`} />
+              <span className={`w-2 h-2 rounded-full shrink-0 ${si.dot}`} />
               <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                 {t.task.name}
               </span>
@@ -55,11 +55,9 @@ export default function Sidebar({
             </li>
           )
         })}
-        {tasks.length === 0 && (
-          <li className="text-fg-muted text-center py-6 text-[13px]">暂无任务</li>
-        )}
+        {tasks.length === 0 && <li className="text-fg-muted text-center py-6 text-sm">暂无任务</li>}
       </ul>
-      <div className="px-3 py-2.5 border-t border-line shrink-0">
+      <div className="px-3 py-3 border-t border-line shrink-0">
         <button className="btn-base w-full text-left" onClick={onOpenSettings}>
           ⚙ 设置
         </button>

@@ -21,7 +21,7 @@ export default function TaskForm({
 }: TaskFormProps) {
   return (
     <div className="p-4 border-b border-line flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">任务名称</label>
         <input
           className="field-input"
@@ -29,7 +29,7 @@ export default function TaskForm({
           onChange={(e) => onChange({ name: e.target.value })}
         />
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">可执行文件</label>
         <div className="flex gap-2">
           <input
@@ -42,11 +42,11 @@ export default function TaskForm({
             浏览…
           </button>
         </div>
-        <span className="text-[11px] text-fg-muted">
+        <span className="text-xs text-fg-muted">
           支持完整命令（如 node D:\AI\server.js），仅写名称时自动搜索 PATH
         </span>
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">
           启动参数（每行可写多个参数，运行时自动拆分）
         </label>
@@ -58,7 +58,7 @@ export default function TaskForm({
           onChange={(e) => onChange({ arguments: e.target.value })}
         />
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">工作目录</label>
         <div className="flex gap-2">
           <input
@@ -72,8 +72,8 @@ export default function TaskForm({
           </button>
         </div>
       </div>
-      <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-2.5">
-        <span className="text-[13px] text-fg">崩溃自动重启</span>
+      <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
+        <span className="text-sm text-fg">崩溃自动重启</span>
         <label className="switch">
           <input
             type="checkbox"
@@ -83,9 +83,9 @@ export default function TaskForm({
           <span className="switch-slider" />
         </label>
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">环境变量</label>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-2">
           {form.env_vars.map((ev, i) => (
             <div key={i} className="flex gap-2">
               <input
@@ -126,7 +126,7 @@ export default function TaskForm({
           </button>
         </div>
       </div>
-      <div className="flex gap-2.5 mt-1">
+      <div className="flex gap-3 mt-1">
         <button className="btn-primary" onClick={onSave} disabled={!dirty}>
           保存配置
         </button>

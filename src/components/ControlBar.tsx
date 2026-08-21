@@ -22,7 +22,7 @@ interface ControlBarProps {
 export default function ControlBar({ status, pid, onStart, onStop, onClearLog }: ControlBarProps) {
   const si = statusInfo(status)
   return (
-    <div className="flex items-center gap-3 px-5 py-2.5 border-b border-line shrink-0">
+    <div className="flex items-center gap-3 px-5 py-3 border-b border-line shrink-0">
       {status === 'running' ? (
         <button className="btn-stop" onClick={onStop}>
           ■ 停止 (PID {pid})
@@ -32,7 +32,7 @@ export default function ControlBar({ status, pid, onStart, onStop, onClearLog }:
           ▶ 启动
         </button>
       )}
-      <span className={`text-xs px-2.5 py-[3px] rounded-full bg-input-bg border ${si.cls}`}>
+      <span className={`text-xs px-3 py-1 rounded-full bg-input-bg border ${si.cls}`}>
         {si.label}
       </span>
       <div className="flex-1" />

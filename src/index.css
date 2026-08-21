@@ -11,45 +11,72 @@
   --color-success: #22c55e;
   --color-danger: #ef4444;
   --color-idle: #6b7280;
-  --font-sans: 'Segoe UI', 'Microsoft YaHei', Inter, Avenir, Helvetica, Arial, sans-serif;
-  --font-mono: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  /* 字体栈：Windows 上优先 Variable 版（Win11 子像素/灰阶渲染更佳），中文走 YaHei UI（Win10+ 改进版）
+     英文按字形回落到对应中文字体之外的系统默认，保证中英混排一致 */
+  --font-sans:
+    'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC',
+    sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+}
+
+/* ==================== 全局排版 ==================== */
+
+@layer base {
+  html {
+    /* 深色界面下用抗锯齿灰阶渲染，避免 ClearType 彩色亚像素在深底上发虚 */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    /* 轻微字距改善中英文混排的视觉密度 */
+    letter-spacing: 0.01em;
+  }
+
+  .out-stdout,
+  .out-stderr {
+    /* 终端区域用等宽数字，避免列对齐跳动 */
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 /* ==================== 通用输入框（复用模式多，用 component layer）==================== */
+/* 尺寸遵循 4px 基础单位：控件高度 32px（text-sm 14 + py-2 16 + 边框 2） */
 
 @layer components {
   .field-input {
-    @apply bg-input-bg border border-line rounded-md text-fg px-2.5 py-[7px] text-[13px] outline-none w-full focus:border-accent;
+    @apply bg-input-bg border border-line rounded-md text-fg px-3 py-2 text-sm outline-none w-full focus:border-accent;
   }
 
   .btn-base {
-    @apply bg-input-bg border border-line rounded-md text-fg px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-[#2f3440] disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-input-bg border border-line rounded-md text-fg px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-[#2f3440] disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-primary {
-    @apply bg-accent border-accent text-white rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-blue-600 disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-accent border-accent text-white rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-blue-600 disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-danger {
-    @apply bg-danger/10 border-danger/60 text-danger rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-danger/25 hover:border-danger disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-danger/10 border-danger/60 text-danger rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-danger/25 hover:border-danger disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-start {
-    @apply bg-success/15 border-success/60 text-success rounded-md px-3.5 py-[7px] text-[13px] font-semibold cursor-pointer transition-colors hover:bg-success/30 hover:border-success disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-success/15 border-success/60 text-success rounded-md px-4 py-2 text-sm font-semibold cursor-pointer transition-colors hover:bg-success/30 hover:border-success disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-stop {
-    @apply bg-danger border-danger text-white font-semibold rounded-md px-3.5 py-[7px] text-[13px] cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-danger border-danger text-white font-semibold rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
   }
 }
 
 /* ==================== Toggle Switch（伪元素无法用 utility 实现）==================== */
+/* 轨道 40×24，滑块 16，左右留白 4，开态位移 16（= 40 - 16 - 4×2） */
 
 .switch {
   position: relative;
   display: inline-block;
   width: 40px;
-  height: 22px;
+  height: 24px;
   flex-shrink: 0;
 }
 
@@ -63,7 +90,7 @@
   position: absolute;
   inset: 0;
   background: var(--color-idle);
-  border-radius: 22px;
+  border-radius: 12px;
   cursor: pointer;
   transition: background 0.2s;
 }
@@ -71,8 +98,8 @@
 .switch-slider::before {
   content: '';
   position: absolute;
-  left: 3px;
-  top: 3px;
+  left: 4px;
+  top: 4px;
   width: 16px;
   height: 16px;
   background: #fff;
@@ -85,7 +112,7 @@
 }
 
 .switch input:checked + .switch-slider::before {
-  transform: translateX(18px);
+  transform: translateX(16px);
 }
 
 /* ==================== 输出行（动态 HTML，无法用 utility class）==================== */
@@ -106,13 +133,13 @@
 /* ==================== 滚动条 ==================== */
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
   background: #333a46;
-  border-radius: 5px;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
