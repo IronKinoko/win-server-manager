@@ -1092,9 +1092,9 @@ fn perform_quit(app: &AppHandle) {
         if tm.load_settings().auto_restore {
             tm.sync_running_set();
             stop_all_tasks(app, &tm);
-            // 任务已全部停止，顺便清理日志，重启后不残留上一轮输出
-            tm.clear_all_logs();
         }
+        // 无论何种模式，退出都清空所有任务日志，重启后不残留上一轮输出
+        tm.clear_all_logs();
     }
     app.exit(0);
 }

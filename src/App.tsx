@@ -174,18 +174,34 @@ function App() {
   }, [outputs, selectedId])
 
   const selectTask = async (id: string) => {
+    // 切走已停止的任务时顺手清掉它的日志（内存 + 磁盘）
+    if (selectedId && selectedId !== id) {
+      const leaving = tasks.find((x) => x.task.id === selectedId)
+      if (leaving?.status === 'stopped') {
+        const lid = selectedId
+        setOutputs((prev) => ({ ...prev, [lid]: [] }))
+        invoke('clear_task_log', { id: lid }).catch(() => {})
+      }
+    }
     setSelectedId(id)
     const t = tasks.find((x) => x.task.id === id)
     if (t) {
       setForm({ ...t.task, env_vars: t.task.env_vars.map((e) => ({ ...e })) })
-      const log = await invoke<string>('get_task_log', { id })
-      let lines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
-      // 日志文件以换行结尾，split 会多出一个尾部空串，去掉以免每次进入多出空白行
-      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-      setOutputs((prev) => ({
-        ...prev,
-        [id]: lines.slice(-MAX_OUTPUT_LINES),
-      }))
+      if (t.status === 'stopped') {
+        // 进入已停止的任务不回显历史：直接空终端，并清掉磁盘上残留的日志。
+        // 以「进入时」的状态为准，避免离开时刻状态未及时刷新导致旧日志复活
+        setOutputs((prev) => ({ ...prev, [id]: [] }))
+        invoke('clear_task_log', { id }).catch(() => {})
+      } else {
+        const log = await invoke<string>('get_task_log', { id })
+        let lines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
+        // 日志文件以换行结尾，split 会多出一个尾部空串，去掉以免每次进入多出空白行
+        if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+        setOutputs((prev) => ({
+          ...prev,
+          [id]: lines.slice(-MAX_OUTPUT_LINES),
+        }))
+      }
     }
     setDirty(false)
   }
