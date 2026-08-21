@@ -10,10 +10,12 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
   const [autoStart, setAutoStart] = useState(false)
   const [autoRestore, setAutoRestore] = useState(false)
   const [silentStart, setSilentStart] = useState(false)
+  const [keepAlive, setKeepAlive] = useState(true)
 
   useEffect(() => {
     invoke<boolean>('get_setting_auto_restore').then(setAutoRestore).catch(() => {})
     invoke<boolean>('get_setting_silent_start').then(setSilentStart).catch(() => {})
+    invoke<boolean>('get_setting_keep_alive').then(setKeepAlive).catch(() => {})
     invoke<boolean>('get_autostart').then(setAutoStart).catch(() => {})
   }, [])
 
@@ -34,6 +36,11 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
   const toggleSilentStart = (v: boolean) => {
     setSilentStart(v)
     invoke('set_setting_silent_start', { value: v }).catch(() => {})
+  }
+
+  const toggleKeepAlive = (v: boolean) => {
+    setKeepAlive(v)
+    invoke('set_setting_keep_alive', { value: v }).catch(() => {})
   }
 
   if (!visible) return null
@@ -66,6 +73,22 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
                 type="checkbox"
                 checked={autoStart}
                 onChange={(e) => toggleAutoStart(e.target.checked)}
+              />
+              <span className="switch-slider" />
+            </label>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-[13px] text-fg">允许后台继续运行</span>
+              <span className="text-xs text-fg-muted leading-snug">
+                开启：关闭主窗口仅隐藏到系统托盘；关闭：关闭主窗口即退出应用
+              </span>
+            </div>
+            <label className="switch shrink-0">
+              <input
+                type="checkbox"
+                checked={keepAlive}
+                onChange={(e) => toggleKeepAlive(e.target.checked)}
               />
               <span className="switch-slider" />
             </label>

@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Tauri / Rust 构建产物（编译缓存、安装程序等，与 src-tauri/.gitignore 双保险）
+src-tauri/target
+src-tauri/gen/schemas
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

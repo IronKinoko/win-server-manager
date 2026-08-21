@@ -61,12 +61,20 @@ pub struct StatusEvent {
 }
 
 // 应用级设置（settings.json）
+fn default_keep_alive() -> bool {
+    // 旧版 settings.json 缺少该字段时保持既有行为：关闭主窗口 = 隐藏到托盘
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct AppSettings {
     #[serde(default)]
     auto_restore: bool,
     #[serde(default)]
     silent_start: bool,
+    // 是否允许关闭主窗口后在后台（托盘）继续运行
+    #[serde(default = "default_keep_alive")]
+    keep_alive_on_close: bool,
 }
 
 // ==================== 任务管理器 ====================
@@ -116,6 +124,16 @@ impl TaskManager {
         self.starting.lock().unwrap().remove(id);
     }
 
+    /// 清空全部任务日志文件（退出时随停止任务一并调用）
+    fn clear_all_logs(&self) {
+        let dir = self.data_dir.join("logs");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
     fn load_tasks(&self) {
         let path = self.data_dir.join("tasks.json");
         if path.exists() {
@@ -153,6 +171,7 @@ impl TaskManager {
         AppSettings {
             auto_restore: false,
             silent_start: false,
+            keep_alive_on_close: default_keep_alive(),
         }
     }
 
@@ -998,6 +1017,18 @@ fn set_setting_silent_start(state: State<'_, Arc<TaskManager>>, value: bool) {
     state.save_settings(&s);
 }
 
+#[tauri::command]
+fn get_setting_keep_alive(state: State<'_, Arc<TaskManager>>) -> bool {
+    state.load_settings().keep_alive_on_close
+}
+
+#[tauri::command]
+fn set_setting_keep_alive(state: State<'_, Arc<TaskManager>>, value: bool) {
+    let mut s = state.load_settings();
+    s.keep_alive_on_close = value;
+    state.save_settings(&s);
+}
+
 // ---- 开机自启（HKCU\...\Run 注册表项）----
 
 #[cfg(target_os = "windows")]
@@ -1052,6 +1083,22 @@ fn get_running_task_ids(state: State<'_, Arc<TaskManager>>) -> Vec<String> {
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// 统一退出流程（托盘「退出应用」与禁用后台继续运行时关闭主窗口共用）：
+// 若开启「自动恢复任务」则保存运行快照并停止全部任务，下次启动时恢复；
+// 未开启则进程保持在后台运行，也不做恢复
+fn perform_quit(app: &AppHandle) {
+    QUITTING.store(true, Ordering::SeqCst);
+    if let Some(tm) = app.try_state::<Arc<TaskManager>>() {
+        if tm.load_settings().auto_restore {
+            tm.sync_running_set();
+            stop_all_tasks(app, &tm);
+            // 任务已全部停止，顺便清理日志，重启后不残留上一轮输出
+            tm.clear_all_logs();
+        }
+    }
+    app.exit(0);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1084,11 +1131,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 关闭窗口时隐藏到托盘，而非退出
+            // 关闭窗口：默认隐藏到托盘继续后台运行；
+            // 若设置中关闭了「允许后台继续运行」，则等同于退出应用
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if !QUITTING.load(Ordering::SeqCst) {
-                    api.prevent_close();
-                    let _ = window.hide();
+                    let keep_alive = window
+                        .app_handle()
+                        .try_state::<Arc<TaskManager>>()
+                        .map(|tm| tm.load_settings().keep_alive_on_close)
+                        .unwrap_or(true);
+                    if keep_alive {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    } else {
+                        perform_quit(&window.app_handle());
+                    }
                 }
             }
         })
@@ -1117,16 +1174,8 @@ pub fn run() {
                     }
                 }
                 "quit" => {
-                    // 退出：若开启「自动恢复任务」则保留运行快照并停止全部任务，下次启动时恢复；
-                    // 关闭时不停止进程（任务继续在后台运行），也不做恢复
-                    QUITTING.store(true, Ordering::SeqCst);
-                    if let Some(tm) = app.try_state::<Arc<TaskManager>>() {
-                        if tm.load_settings().auto_restore {
-                            tm.sync_running_set();
-                            stop_all_tasks(app, &tm);
-                        }
-                    }
-                    app.exit(0);
+                    // 退出：与禁用后台继续运行时关闭主窗口走同一流程
+                    perform_quit(app);
                 }
                 _ => {}
             }
@@ -1144,6 +1193,8 @@ pub fn run() {
             set_setting_auto_restore,
             get_setting_silent_start,
             set_setting_silent_start,
+            get_setting_keep_alive,
+            set_setting_keep_alive,
             get_autostart,
             set_autostart,
             get_running_task_ids

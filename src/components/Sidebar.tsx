@@ -17,6 +17,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ tasks, selectedId, onSelect, onAdd, onOpenSettings }: SidebarProps) {
+  // 按名称首字母排序（中文走拼音序，不改动原始数组顺序）
+  const sorted = [...tasks].sort((a, b) => a.task.name.localeCompare(b.task.name, 'zh-Hans-CN'))
   return (
     <aside className="w-[280px] min-w-[280px] bg-panel border-r border-line flex flex-col">
       <div className="p-3.5 border-b border-line flex flex-col gap-2.5">
@@ -24,7 +26,7 @@ export default function Sidebar({ tasks, selectedId, onSelect, onAdd, onOpenSett
         <button className="btn-primary" onClick={onAdd}>+ 添加任务</button>
       </div>
       <ul className="list-none m-0 p-2 overflow-y-auto flex-1">
-        {tasks.map((t) => {
+        {sorted.map((t) => {
           const si = statusCls(t.status)
           return (
             <li
