@@ -184,6 +184,32 @@ function App() {
     }
   }, [outputs, selectedId])
 
+  // Ctrl/Cmd + A 仅全选终端输出区内容，避免选中其它 UI
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isSelectAll = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a'
+      if (!isSelectAll) return
+      const outputEl = outputRef.current
+      if (!outputEl) return
+
+      const active = document.activeElement
+      const selection = window.getSelection()
+      const anchorInOutput = !!selection?.anchorNode && outputEl.contains(selection.anchorNode)
+      const focusInOutput = active === outputEl || (!!active && outputEl.contains(active))
+
+      if (!anchorInOutput && !focusInOutput) return
+
+      event.preventDefault()
+      const range = document.createRange()
+      range.selectNodeContents(outputEl)
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const selectTask = async (id: string) => {
     // 切走已停止的任务时顺手清掉它的日志（内存 + 磁盘）
     if (selectedId && selectedId !== id) {
@@ -303,7 +329,7 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-surface text-fg font-sans">
+    <div className="flex h-screen bg-surface text-fg font-sans select-none">
       <Sidebar
         tasks={tasks}
         selectedId={selectedId}

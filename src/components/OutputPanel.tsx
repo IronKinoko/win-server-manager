@@ -21,7 +21,8 @@ export default function OutputPanel({
       />
       <div
         ref={outputRef}
-        className="m-0 px-5 py-3 bg-[#0c0c0c] text-[#dce3ea] font-mono text-sm leading-6 overflow-y-auto whitespace-pre-wrap break-all shrink-0"
+        className="m-0 px-5 py-3 bg-[#0c0c0c] text-[#dce3ea] font-mono text-sm leading-6 overflow-y-auto whitespace-pre-wrap break-all shrink-0 select-text"
+        tabIndex={0}
         style={{ height }}
         dangerouslySetInnerHTML={{
           __html: html || '<span class="out-empty">(暂无输出)</span>',

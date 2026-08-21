@@ -220,7 +220,8 @@ impl TaskManager {
     fn get_all(&self) -> Vec<TaskInfo> {
         let tasks = self.tasks.lock().unwrap();
         let states = self.states.lock().unwrap();
-        tasks.values()
+        tasks
+            .values()
             .map(|t| {
                 let state = states.get(&t.id);
                 TaskInfo {
@@ -401,13 +402,29 @@ fn kill_same_name_processes(exe_path: &str) -> bool {
 
 // ==================== 核心启动逻辑 ====================
 
-// 按空白拆分命令行，保留双引号内的内容（简化版 CommandLineToArgvW 语义，不处理转义符）
+// 按空白拆分命令行，保留双引号内的内容。
+// 支持 \" 与 \\ 转义，避免 JSON 参数中的引号被错误吞掉。
 fn parse_command_line(cmdline: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_quotes = false;
-    for ch in cmdline.chars() {
+    let mut chars = cmdline.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
+            '\\' => {
+                // 仅处理最常见的命令行转义：\\ 和 \"；其余场景保留反斜杠原样。
+                match chars.peek().copied() {
+                    Some('"') => {
+                        cur.push('"');
+                        let _ = chars.next();
+                    }
+                    Some('\\') => {
+                        cur.push('\\');
+                        let _ = chars.next();
+                    }
+                    _ => cur.push('\\'),
+                }
+            }
             '"' => in_quotes = !in_quotes,
             c if c.is_whitespace() && !in_quotes => {
                 if !cur.is_empty() {
@@ -459,7 +476,9 @@ fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
         std::fs::canonicalize(&head).ok()
     } else {
         // 纯名称：优先当前目录下的本地文件，再搜 PATH
-        std::fs::canonicalize(&head).ok().or_else(|| find_in_path(&head))
+        std::fs::canonicalize(&head)
+            .ok()
+            .or_else(|| find_in_path(&head))
     };
     match program {
         Some(p) => Ok((p, rest)),
@@ -471,11 +490,7 @@ fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
     }
 }
 
-fn do_start_task(
-    app: &AppHandle,
-    tm: &Arc<TaskManager>,
-    task: &Task,
-) -> Result<u32, String> {
+fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<u32, String> {
     let (exe_path, extra_args) = resolve_command(&task.exe_path)?;
 
     // 每次启动清空该任务的日志与前端输出，保证输出区只反映本次运行
@@ -499,10 +514,7 @@ fn do_start_task(
                 source: "stderr".into(),
                 text: format!(
                     "[单实例] 检测到同名进程 {} 正在运行，已终止旧实例\n",
-                    exe_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("?")
+                    exe_path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
                 ),
             },
         );
@@ -813,7 +825,13 @@ fn get_tasks(state: State<'_, Arc<TaskManager>>) -> Vec<TaskInfo> {
 #[tauri::command]
 fn add_task(state: State<'_, Arc<TaskManager>>, mut task: Task) -> Result<TaskInfo, String> {
     if task.id.is_empty() {
-        task.id = format!("task_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+        task.id = format!(
+            "task_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
     }
     let mut tasks = state.tasks.lock().unwrap();
     if tasks.contains_key(&task.id) {
@@ -853,17 +871,11 @@ fn update_task(state: State<'_, Arc<TaskManager>>, task: Task) -> Result<TaskInf
 
     let states = state.states.lock().unwrap();
     let st = states.get(&task.id);
-    let status = st
-        .map(|s| s.status.clone())
-        .unwrap_or(TaskStatus::Stopped);
+    let status = st.map(|s| s.status.clone()).unwrap_or(TaskStatus::Stopped);
     let pid = st.and_then(|s| s.pid);
     drop(states);
 
-    Ok(TaskInfo {
-        task,
-        status,
-        pid,
-    })
+    Ok(TaskInfo { task, status, pid })
 }
 
 #[tauri::command]
@@ -914,11 +926,7 @@ async fn start_task(
 }
 
 #[tauri::command]
-fn stop_task(
-    app: AppHandle,
-    state: State<'_, Arc<TaskManager>>,
-    id: String,
-) -> Result<(), String> {
+fn stop_task(app: AppHandle, state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), String> {
     let tm = state.inner().clone();
 
     let pid = {
@@ -1104,10 +1112,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("无法获取应用数据目录");
+            let data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
             std::fs::create_dir_all(&data_dir).ok();
             let task_manager = Arc::new(TaskManager::new(data_dir));
             app.manage(task_manager.clone());
