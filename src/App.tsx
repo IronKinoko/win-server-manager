@@ -179,9 +179,12 @@ function App() {
     if (t) {
       setForm({ ...t.task, env_vars: t.task.env_vars.map((e) => ({ ...e })) })
       const log = await invoke<string>('get_task_log', { id })
+      let lines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
+      // 日志文件以换行结尾，split 会多出一个尾部空串，去掉以免每次进入多出空白行
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
       setOutputs((prev) => ({
         ...prev,
-        [id]: log ? log.split('\n').slice(-MAX_OUTPUT_LINES) : [],
+        [id]: lines.slice(-MAX_OUTPUT_LINES),
       }))
     }
     setDirty(false)

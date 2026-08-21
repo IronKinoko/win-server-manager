@@ -95,18 +95,8 @@
   color: #f85149;
 }
 
-.out-stderr::before {
-  content: '[stderr] ';
-  color: #d4736e;
-}
-
 .out-stdout {
   display: block;
-}
-
-.out-stdout::before {
-  content: '[stdout] ';
-  color: #7a8a9e;
 }
 
 .out-empty {
