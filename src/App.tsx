@@ -15,7 +15,12 @@ const ansi = new AnsiUp()
 ansi.escape_html = true
 
 // 覆盖默认配色为 Windows Console 深色背景下的标准值
-;(ansi as any).ansi_colors = [
+type AnsiColor = { rgb: number[]; class_name: string }
+const ansiColors = ansi as unknown as {
+  ansi_colors: [AnsiColor[], AnsiColor[]]
+  palette_256: AnsiColor[]
+}
+ansiColors.ansi_colors = [
   // Normal (30-37)
   [
     { rgb: [0, 0, 0], class_name: 'ansi-black' },
@@ -40,9 +45,9 @@ ansi.escape_html = true
   ],
 ]
 // 同步更新 256 色板的前 16 项
-const palette: any[] = (ansi as any).palette_256
+const palette: AnsiColor[] = ansiColors.palette_256
 for (let i = 0; i < 16 && i < palette.length; i++) {
-  const src = i < 8 ? (ansi as any).ansi_colors[0][i] : (ansi as any).ansi_colors[1][i - 8]
+  const src = i < 8 ? ansiColors.ansi_colors[0][i] : ansiColors.ansi_colors[1][i - 8]
   palette[i] = { ...palette[i], rgb: [...src.rgb], class_name: src.class_name }
 }
 
@@ -62,32 +67,35 @@ function App() {
   })
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null)
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragState.current = { startY: e.clientY, startHeight: terminalHeight }
-    const onMove = (ev: MouseEvent) => {
-      const ds = dragState.current
-      if (!ds) return
-      const delta = ds.startY - ev.clientY
-      const newHeight = Math.min(600, Math.max(100, ds.startHeight + delta))
-      setTerminalHeight(newHeight)
-    }
-    const onUp = () => {
-      dragState.current = null
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setTerminalHeight((h) => {
-        localStorage.setItem('terminal-height', String(h))
-        return h
-      })
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-  }, [terminalHeight])
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      dragState.current = { startY: e.clientY, startHeight: terminalHeight }
+      const onMove = (ev: MouseEvent) => {
+        const ds = dragState.current
+        if (!ds) return
+        const delta = ds.startY - ev.clientY
+        const newHeight = Math.min(600, Math.max(100, ds.startHeight + delta))
+        setTerminalHeight(newHeight)
+      }
+      const onUp = () => {
+        dragState.current = null
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setTerminalHeight((h) => {
+          localStorage.setItem('terminal-height', String(h))
+          return h
+        })
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+      document.body.style.cursor = 'row-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [terminalHeight],
+  )
 
   const selected = tasks.find((t) => t.task.id === selectedId) ?? null
 
@@ -136,7 +144,10 @@ function App() {
     })
     const unlisteners: Array<() => void> = []
     const track = (fn: () => void) => {
-      if (cancelled) { fn(); return }
+      if (cancelled) {
+        fn()
+        return
+      }
       unlisteners.push(fn)
     }
 
@@ -194,9 +205,12 @@ function App() {
         invoke('clear_task_log', { id }).catch(() => {})
       } else {
         const log = await invoke<string>('get_task_log', { id })
-        let lines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
+        const rawLines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
         // 日志文件以换行结尾，split 会多出一个尾部空串，去掉以免每次进入多出空白行
-        if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+        const lines =
+          rawLines.length > 0 && rawLines[rawLines.length - 1] === ''
+            ? rawLines.slice(0, -1)
+            : rawLines
         setOutputs((prev) => ({
           ...prev,
           [id]: lines.slice(-MAX_OUTPUT_LINES),

@@ -15,7 +15,9 @@
 - 构建桌面安装包：`pnpm tauri build`
 - Rust 检查：`cargo check --manifest-path src-tauri/Cargo.toml`
 
-目前没有独立的测试或 lint 脚本。修改前端后运行 `pnpm build`；修改 Rust 或 Tauri 配置后还要运行 Rust 检查。Tauri 开发要求 Vite 使用端口 `1420`，并在 [vite.config.ts](vite.config.ts) 中启用了严格端口模式。
+- 代码检查：`pnpm lint`（ESLint）、`pnpm format` / `pnpm format:check`（Prettier）
+
+已配置提交前检查（husky pre-commit）：先 `tsc --noEmit`，再对暂存文件跑 lint-staged —— TS/TSX 走 `eslint --fix` + `prettier --write`，CSS 走 `prettier --write`，Rust 源文件走 `rustfmt --edition 2021`。Prettier 风格见 [.prettierrc.json](.prettierrc.json)（无分号、单引号）。修改前端后运行 `pnpm build`；修改 Rust 或 Tauri 配置后还要运行 Rust 检查。Tauri 开发要求 Vite 使用端口 `1420`，并在 [vite.config.ts](vite.config.ts) 中启用了严格端口模式。
 
 ## 架构
 

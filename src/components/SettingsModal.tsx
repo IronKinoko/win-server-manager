@@ -13,10 +13,18 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
   const [keepAlive, setKeepAlive] = useState(true)
 
   useEffect(() => {
-    invoke<boolean>('get_setting_auto_restore').then(setAutoRestore).catch(() => {})
-    invoke<boolean>('get_setting_silent_start').then(setSilentStart).catch(() => {})
-    invoke<boolean>('get_setting_keep_alive').then(setKeepAlive).catch(() => {})
-    invoke<boolean>('get_autostart').then(setAutoStart).catch(() => {})
+    invoke<boolean>('get_setting_auto_restore')
+      .then(setAutoRestore)
+      .catch(() => {})
+    invoke<boolean>('get_setting_silent_start')
+      .then(setSilentStart)
+      .catch(() => {})
+    invoke<boolean>('get_setting_keep_alive')
+      .then(setKeepAlive)
+      .catch(() => {})
+    invoke<boolean>('get_autostart')
+      .then(setAutoStart)
+      .catch(() => {})
   }, [])
 
   useImperativeHandle(ref, () => ({

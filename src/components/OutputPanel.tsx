@@ -7,7 +7,12 @@ interface OutputPanelProps {
   onMouseDownResize: (e: React.MouseEvent) => void
 }
 
-export default function OutputPanel({ html, height, outputRef, onMouseDownResize }: OutputPanelProps) {
+export default function OutputPanel({
+  html,
+  height,
+  outputRef,
+  onMouseDownResize,
+}: OutputPanelProps) {
   return (
     <>
       <div
