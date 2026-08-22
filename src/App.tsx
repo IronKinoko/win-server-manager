@@ -1,63 +1,26 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { AnsiUp } from 'ansi_up'
 import type { Task, TaskInfo, OutputEvent, StatusEvent } from './types'
 import Sidebar from './components/Sidebar'
 import TaskForm from './components/TaskForm'
 import ControlBar from './components/ControlBar'
-import OutputPanel from './components/OutputPanel'
+import OutputPanel, { type OutputLine, type OutputPanelHandle } from './components/OutputPanel'
 import SettingsModal, { type SettingsModalHandle } from './components/SettingsModal'
 
 const MAX_OUTPUT_LINES = 500
-const ansi = new AnsiUp()
-ansi.escape_html = true
-
-// 覆盖默认配色为 Windows Console 深色背景下的标准值
-type AnsiColor = { rgb: number[]; class_name: string }
-const ansiColors = ansi as unknown as {
-  ansi_colors: [AnsiColor[], AnsiColor[]]
-  palette_256: AnsiColor[]
-}
-ansiColors.ansi_colors = [
-  // Normal (30-37)
-  [
-    { rgb: [0, 0, 0], class_name: 'ansi-black' },
-    { rgb: [205, 49, 49], class_name: 'ansi-red' },
-    { rgb: [13, 188, 121], class_name: 'ansi-green' },
-    { rgb: [229, 231, 16], class_name: 'ansi-yellow' },
-    { rgb: [51, 153, 255], class_name: 'ansi-blue' },
-    { rgb: [188, 63, 188], class_name: 'ansi-magenta' },
-    { rgb: [17, 168, 205], class_name: 'ansi-cyan' },
-    { rgb: [204, 204, 204], class_name: 'ansi-white' },
-  ],
-  // Bright (90-97)
-  [
-    { rgb: [118, 118, 118], class_name: 'ansi-bright-black' },
-    { rgb: [231, 72, 86], class_name: 'ansi-bright-red' },
-    { rgb: [49, 221, 185], class_name: 'ansi-bright-green' },
-    { rgb: [240, 230, 140], class_name: 'ansi-bright-yellow' },
-    { rgb: [74, 166, 255], class_name: 'ansi-bright-blue' },
-    { rgb: [234, 92, 236], class_name: 'ansi-bright-magenta' },
-    { rgb: [53, 196, 231], class_name: 'ansi-bright-cyan' },
-    { rgb: [255, 255, 255], class_name: 'ansi-bright-white' },
-  ],
-]
-// 同步更新 256 色板的前 16 项
-const palette: AnsiColor[] = ansiColors.palette_256
-for (let i = 0; i < 16 && i < palette.length; i++) {
-  const src = i < 8 ? ansiColors.ansi_colors[0][i] : ansiColors.ansi_colors[1][i - 8]
-  palette[i] = { ...palette[i], rgb: [...src.rgb], class_name: src.class_name }
-}
+// 稳定引用：避免每次渲染给 OutputPanel 传新的空数组，触发无谓的终端重置
+const EMPTY_OUTPUT_LINES: OutputLine[] = []
 
 function App() {
   const [tasks, setTasks] = useState<TaskInfo[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [outputs, setOutputs] = useState<Record<string, string[]>>({})
+  const [outputs, setOutputs] = useState<Record<string, OutputLine[]>>({})
   const [form, setForm] = useState<Task | null>(null)
   const [dirty, setDirty] = useState(false)
   const outputRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<OutputPanelHandle>(null)
   const settingsRef = useRef<SettingsModalHandle>(null)
 
   // 终端区域高度（所有任务通用，持久化到 localStorage）
@@ -98,21 +61,6 @@ function App() {
   )
 
   const selected = tasks.find((t) => t.task.id === selectedId) ?? null
-
-  const outputHtml = useMemo(() => {
-    if (!selected) return ''
-    const lines = outputs[selected.task.id] ?? []
-    if (lines.length === 0) return ''
-    return lines
-      .map((l) => {
-        const line = l.replace(/[\r\n]+$/, '')
-        const m = line.match(/^\[(stdout|stderr)\] (.*)$/)
-        const src = m?.[1] ?? 'stdout'
-        const text = m?.[2] ?? line
-        return `<span class="out-${src}">${ansi.ansi_to_html(text)}</span>`
-      })
-      .join('')
-  }, [outputs, selected])
 
   const refreshTasks = useCallback(async () => {
     const list = await invoke<TaskInfo[]>('get_tasks')
@@ -155,7 +103,7 @@ function App() {
       if (cancelled) return
       const { task_id, source, text } = event.payload
       setOutputs((prev) => {
-        const lines = [...(prev[task_id] ?? []), `[${source}] ${text}`]
+        const lines = [...(prev[task_id] ?? []), { source, text }]
         return { ...prev, [task_id]: lines.slice(-MAX_OUTPUT_LINES) }
       })
     }).then(track)
@@ -177,33 +125,17 @@ function App() {
     }
   }, [refreshTasks])
 
-  // 输出区自动滚动到底部
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight
-    }
-  }, [outputs, selectedId])
-
-  // Ctrl/Cmd + A 仅全选终端输出区内容，避免选中其它 UI
+  // Ctrl/Cmd + A 仅全选终端输出区内容，避免选中其它 UI（焦点在 xterm 容器内才拦截）
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const isSelectAll = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a'
       if (!isSelectAll) return
       const outputEl = outputRef.current
       if (!outputEl) return
-
       const active = document.activeElement
-      const selection = window.getSelection()
-      const anchorInOutput = !!selection?.anchorNode && outputEl.contains(selection.anchorNode)
-      const focusInOutput = active === outputEl || (!!active && outputEl.contains(active))
-
-      if (!anchorInOutput && !focusInOutput) return
-
+      if (!active || !outputEl.contains(active)) return
       event.preventDefault()
-      const range = document.createRange()
-      range.selectNodeContents(outputEl)
-      selection?.removeAllRanges()
-      selection?.addRange(range)
+      panelRef.current?.selectAll()
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -233,10 +165,12 @@ function App() {
         const log = await invoke<string>('get_task_log', { id })
         const rawLines = log ? log.split('\n').map((l) => l.replace(/\r$/, '')) : []
         // 日志文件以换行结尾，split 会多出一个尾部空串，去掉以免每次进入多出空白行
-        const lines =
+        const textLines =
           rawLines.length > 0 && rawLines[rawLines.length - 1] === ''
             ? rawLines.slice(0, -1)
             : rawLines
+        // 日志文件不区分 stdout/stderr，一律按普通文本回显
+        const lines: OutputLine[] = textLines.map((text) => ({ source: 'stdout', text }))
         setOutputs((prev) => ({
           ...prev,
           [id]: lines.slice(-MAX_OUTPUT_LINES),
@@ -298,7 +232,10 @@ function App() {
       // 启动失败（如可执行文件不存在）：把后端返回的错误显示到该任务的输出区
       setOutputs((prev) => ({
         ...prev,
-        [id]: [...(prev[id] ?? []), `[错误] ${String(e)}`].slice(-MAX_OUTPUT_LINES),
+        [id]: [
+          ...(prev[id] ?? []),
+          { source: 'stdout' as const, text: `[错误] ${String(e)}` },
+        ].slice(-MAX_OUTPUT_LINES),
       }))
     }
   }
@@ -362,7 +299,9 @@ function App() {
               onClearLog={handleClearLog}
             />
             <OutputPanel
-              html={outputHtml}
+              ref={panelRef}
+              taskId={selected.task.id}
+              lines={outputs[selected.task.id] ?? EMPTY_OUTPUT_LINES}
               height={terminalHeight}
               outputRef={outputRef}
               onMouseDownResize={handleResizeStart}

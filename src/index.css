@@ -34,12 +34,6 @@
 
     background-color: var(--color-surface);
   }
-
-  .out-stdout,
-  .out-stderr {
-    /* 终端区域用等宽数字，避免列对齐跳动 */
-    font-variant-numeric: tabular-nums;
-  }
 }
 
 /* ==================== 通用输入框（复用模式多，用 component layer）==================== */
@@ -115,21 +109,6 @@
 
 .switch input:checked + .switch-slider::before {
   transform: translateX(16px);
-}
-
-/* ==================== 输出行（动态 HTML，无法用 utility class）==================== */
-
-.out-stderr {
-  display: block;
-  color: #f85149;
-}
-
-.out-stdout {
-  display: block;
-}
-
-.out-empty {
-  color: #5e6e82;
 }
 
 /* ==================== 滚动条 ==================== */
