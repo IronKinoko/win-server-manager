@@ -20,7 +20,10 @@ export default function TaskForm({
   onBrowseDir,
 }: TaskFormProps) {
   return (
-    <div className="p-4 border-b border-line flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
+    <div
+      key={form.id}
+      className="p-4 border-b border-line flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto"
+    >
       <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">任务名称</label>
         <input
