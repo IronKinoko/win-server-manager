@@ -15,7 +15,10 @@
         "title": "Windows 服务管理器",
         "width": 1200,
         "height": 800,
-        "visible": false
+        "visible": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#16181d"
       }
     ],
     "trayIcon": {

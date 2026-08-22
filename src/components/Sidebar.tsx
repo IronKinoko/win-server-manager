@@ -1,4 +1,5 @@
 import type { TaskInfo, TaskStatus } from '../types'
+import { IS_MAC } from '../platform'
 
 function statusCls(s: TaskStatus) {
   switch (s) {
@@ -30,7 +31,14 @@ export default function Sidebar({
   const sorted = [...tasks].sort((a, b) => a.task.name.localeCompare(b.task.name, 'zh-Hans-CN'))
   return (
     <aside className="w-[280px] min-w-[280px] bg-panel border-r border-line flex flex-col">
-      <div className="p-4 border-b border-line flex flex-col gap-3">
+      {/* macOS：整个头部为透明拖拽区（按住空白拖动窗口），顶部加高内边距让标题避开左上角红绿灯；
+          「+ 添加任务」按钮由 Tauri 脚本自动豁免，保持正常点击 */}
+      <div
+        className={`${IS_MAC ? 'pt-9' : ''} px-4 pb-4 border-b border-line flex flex-col gap-3 ${
+          IS_MAC ? 'cursor-default' : ''
+        }`}
+        {...(IS_MAC ? { 'data-tauri-drag-region': 'deep' } : {})}
+      >
         <h1 className="m-0 text-base font-semibold">服务管理器</h1>
         <button className="btn-primary" onClick={onAdd}>
           + 添加任务
