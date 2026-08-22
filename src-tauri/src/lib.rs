@@ -440,18 +440,91 @@ fn parse_command_line(cmdline: &str) -> Vec<String> {
     out
 }
 
-// 在 PATH 中查找可执行文件
+// Windows：按 PATHEXT 环境变量顺序尝试的可执行扩展名（如 .COM;.EXE;.BAT;.CMD）
+#[cfg(target_os = "windows")]
+fn path_extensions() -> Vec<String> {
+    match std::env::var("PATHEXT") {
+        Ok(v) if !v.trim().is_empty() => v
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_ascii_uppercase())
+            .collect(),
+        _ => vec![
+            ".COM".to_string(),
+            ".EXE".to_string(),
+            ".BAT".to_string(),
+            ".CMD".to_string(),
+        ],
+    }
+}
+
+// 在 PATH 中查找可执行文件。
+// Windows 遵循 cmd 的解析语义：依次尝试 PATHEXT 中的扩展名，
+// 因此 npm（只有 npm.cmd 批处理 + 无扩展名 POSIX shim）能正确命中 npm.cmd，
+// 而不是无扩展名的 shim（直接 spawn 会报 os error 193「不是有效的 Win32 应用程序」）。
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var("PATH").ok()?;
+    #[cfg(target_os = "windows")]
+    let exts = path_extensions();
+    #[cfg(not(target_os = "windows"))]
+    let exts = vec![String::new()];
     for dir in std::env::split_paths(&path_var) {
-        for candidate in [name.to_string(), format!("{}.exe", name)] {
-            let p = dir.join(candidate.as_str());
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        for ext in &exts {
+            let candidate = if ext.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}{}", name, ext)
+            };
+            let p = dir.join(candidate);
             if p.is_file() {
                 return std::fs::canonicalize(&p).ok();
             }
         }
     }
     None
+}
+
+// Windows：给定路径没有可识别的可执行扩展名时，按 PATHEXT 顺序补全扩展名再解析。
+// 例如显式填写 C:\...\npm（无扩展名 shim）时会改解析为 C:\...\npm.cmd。
+#[cfg(target_os = "windows")]
+fn extend_with_pathtext(raw: &str) -> Option<PathBuf> {
+    let lower = raw.to_ascii_lowercase();
+    if [".exe", ".com", ".bat", ".cmd"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+    {
+        return None;
+    }
+    for ext in path_extensions() {
+        if let Ok(p) = std::fs::canonicalize(format!("{}{}", raw, ext)) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn extend_with_pathtext(_raw: &str) -> Option<PathBuf> {
+    None
+}
+
+// 解析纯程序名：
+//   Windows 按 shell 语义 PATH 优先（输入 npm 时终端也是搜 PATH + PATHEXT，不会找当前目录）；
+//   其他平台保持原行为：当前目录本地文件优先，其次 PATH。
+fn resolve_bare_name(name: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        find_in_path(name).or_else(|| std::fs::canonicalize(name).ok())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::fs::canonicalize(name)
+            .ok()
+            .or_else(|| find_in_path(name))
+    }
 }
 
 // 解析任务的「可执行文件」字段，支持三种写法：
@@ -464,21 +537,17 @@ fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
     if trimmed.is_empty() {
         return Err("可执行文件为空".into());
     }
-    // 整个字符串就是有效路径时直接使用
-    if let Ok(p) = std::fs::canonicalize(trimmed) {
-        return Ok((p, vec![]));
-    }
     let tokens = parse_command_line(trimmed);
     let head = tokens[0].clone();
     let rest = tokens[1..].to_vec();
     let program = if head.contains('\\') || head.contains('/') {
-        // 带路径分隔符：只按路径解析
-        std::fs::canonicalize(&head).ok()
-    } else {
-        // 纯名称：优先当前目录下的本地文件，再搜 PATH
+        // 带路径分隔符：按路径解析；Windows 上路径无扩展名（如裸写 npm）时按 PATHEXT 补全
         std::fs::canonicalize(&head)
             .ok()
-            .or_else(|| find_in_path(&head))
+            .or_else(|| extend_with_pathtext(&head))
+    } else {
+        // 纯名称：按平台 shell 语义解析（见 resolve_bare_name）
+        resolve_bare_name(&head)
     };
     match program {
         Some(p) => Ok((p, rest)),
@@ -547,6 +616,13 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(0x08000000);
+    }
+
+    // Unix：让子进程成为独立进程组组长（pgid = 子进程 pid），
+    // 停止时 kill -9 -{pid} 即可清理整棵进程树，对应 Windows 的 taskkill /T
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.process_group(0);
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("启动失败: {}", e))?;
@@ -1065,6 +1141,10 @@ fn get_autostart() -> bool {
 
 #[tauri::command]
 fn set_autostart(value: bool) {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = value;
+    }
     #[cfg(target_os = "windows")]
     {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_WRITE};
