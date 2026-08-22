@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# macos-private-api：启用后 wry 才会在运行时关闭 WKWebView 自带白底（drawsBackground），
+# 修复 macOS 缩放窗口时 WebContent 渲染滞后导致的白色边缘。仅 macOS 生效，Windows 构建无影响
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -28,4 +30,3 @@ encoding_rs = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-

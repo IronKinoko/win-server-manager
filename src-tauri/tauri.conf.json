@@ -10,22 +10,24 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Windows 服务管理器",
+        "title": "服务管理器",
         "width": 1200,
         "height": 800,
         "visible": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "backgroundColor": "#16181d"
+        "backgroundColor": "#16181d",
+        "transparent": true
       }
     ],
     "trayIcon": {
       "id": "main",
       "iconPath": "icons/32x32.png",
       "showMenuOnLeftClick": false,
-      "tooltip": "Windows 服务管理器"
+      "tooltip": "服务管理器"
     },
     "security": {
       "csp": null

@@ -31,6 +31,8 @@
   body {
     /* 轻微字距改善中英文混排的视觉密度 */
     letter-spacing: 0.01em;
+
+    background-color: var(--color-surface);
   }
 
   .out-stdout,
