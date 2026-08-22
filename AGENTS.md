@@ -2,7 +2,7 @@
 
 ## 项目
 
-`win-server-manager` 是一个 Windows 桌面任务/进程管理器，使用 Tauri 2、React 19、TypeScript、Vite 和 Rust 构建。界面文本主要使用中文。
+`win-server-manager` 是一个 Windows 桌面任务/进程管理器，使用 Tauri 2、React 19、TypeScript、Vite、Tailwind CSS 和 Rust 构建。界面文本主要使用中文。
 
 请阅读 [README.md](README.md)，了解仓库当前的基础配置说明。
 
@@ -12,7 +12,7 @@
 - 启动前端开发服务器：`pnpm dev`
 - 前端类型检查和生产构建：`pnpm build`
 - 启动桌面应用：`pnpm tauri dev`
-- 构建桌面安装包：`pnpm tauri build`
+- 构建桌面安装包：`pnpm release`
 - Rust 检查：`cargo check --manifest-path src-tauri/Cargo.toml`
 
 - 代码检查：`pnpm lint`（ESLint）、`pnpm format` / `pnpm format:check`（Prettier）
