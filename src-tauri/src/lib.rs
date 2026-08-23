@@ -1147,6 +1147,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 唯一实例：已存在一个活跃实例时，新实例会立即退出，
+        // 插件在此回调中通知首个实例 —— 将现有窗口显示并聚焦到前台
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
             std::fs::create_dir_all(&data_dir).ok();
