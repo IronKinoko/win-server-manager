@@ -101,8 +101,13 @@ function App() {
     listen<OutputEvent>('task-output', (event) => {
       if (cancelled) return
       const { task_id, source, text } = event.payload
+      // 后端按 \n 切块发送且保留行尾换行；渲染层再用 \n 把各行 join 起来。
+      // 若原样存入，每条都带着自身尾部的 \n，join 后相邻两条之间会多出空行。
+      // 这里去掉行尾单次换行（含 CRLF），使事件累积路径与「从日志文件重载」
+      // 路径（split('\n')）的归一化结果保持一致，避免首屏出现多余空行。
+      const normalized = text.replace(/\r?\n$/, '')
       setOutputs((prev) => {
-        const lines = [...(prev[task_id] ?? []), { source, text }]
+        const lines = [...(prev[task_id] ?? []), { source, text: normalized }]
         return { ...prev, [task_id]: lines.slice(-MAX_OUTPUT_LINES) }
       })
     }).then(track)
@@ -233,6 +238,13 @@ function App() {
     setOutputs((prev) => ({ ...prev, [selected.task.id]: [] }))
   }
 
+  // 快速切换终端高度：紧凑 180px <-> 展开 450px，与拖拽边界 (100-600) 兼容
+  const handleToggleHeight = () => {
+    const next = terminalHeight <= 300 ? 450 : 180
+    setTerminalHeight(next)
+    localStorage.setItem('terminal-height', String(next))
+  }
+
   const handleBrowseExe = async () => {
     const path = await open({
       multiple: false,
@@ -265,6 +277,7 @@ function App() {
         ) : (
           <>
             <TaskForm
+              key={form.id}
               form={form}
               dirty={dirty}
               onChange={updateForm}
@@ -276,9 +289,11 @@ function App() {
             <ControlBar
               status={selected.status}
               pid={selected.pid}
+              terminalHeight={terminalHeight}
               onStart={handleStart}
               onStop={handleStop}
               onClearLog={handleClearLog}
+              onToggleHeight={handleToggleHeight}
             />
             <OutputPanel
               lines={outputs[selected.task.id] ?? EMPTY_OUTPUT_LINES}

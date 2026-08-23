@@ -36,32 +36,34 @@
   }
 }
 
-/* ==================== 通用输入框（复用模式多，用 component layer）==================== */
-/* 尺寸遵循 4px 基础单位：控件高度 32px（text-sm 14 + py-2 16 + 边框 2） */
+/* ==================== 通用输入框与按钮（复用模式多，用 component layer）==================== */
+/* 高度统一 36px（h-9，box-sizing: border-box 已含边框）：
+   不用 padding 堆高度——内容行盒高度依赖字体度量，渲染值会出现小数（如 37.33px）；
+   显式 height 可保证跨字体/系统下精确为 36px。文本垂直方向由浏览器自动居中 */
 
 @layer components {
   .field-input {
-    @apply bg-input-bg border border-line rounded-md text-fg px-3 py-2 text-sm outline-none w-full focus:border-accent;
+    @apply bg-input-bg border border-line rounded-md text-fg px-3 h-9 text-sm leading-none outline-none w-full focus:border-accent;
   }
 
   .btn-base {
-    @apply bg-input-bg border border-line rounded-md text-fg px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-[#2f3440] disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-input-bg border border-line rounded-md text-fg px-4 h-9 text-sm cursor-pointer transition-colors hover:bg-[#2f3440] disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-primary {
-    @apply bg-accent border-accent text-white rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-blue-600 disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-accent border-accent text-white rounded-md px-4 h-9 text-sm cursor-pointer transition-colors hover:bg-blue-600 disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-danger {
-    @apply bg-danger/10 border-danger/60 text-danger rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-danger/25 hover:border-danger disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-danger/10 border-danger/60 text-danger rounded-md px-4 h-9 text-sm cursor-pointer transition-colors hover:bg-danger/25 hover:border-danger disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-start {
-    @apply bg-success/15 border-success/60 text-success rounded-md px-4 py-2 text-sm font-semibold cursor-pointer transition-colors hover:bg-success/30 hover:border-success disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-success/15 border-success/60 text-success rounded-md px-4 h-9 text-sm font-semibold cursor-pointer transition-colors hover:bg-success/30 hover:border-success disabled:opacity-45 disabled:cursor-not-allowed;
   }
 
   .btn-stop {
-    @apply bg-danger border-danger text-white font-semibold rounded-md px-4 py-2 text-sm cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
+    @apply bg-danger border-danger text-white font-semibold rounded-md px-4 h-9 text-sm cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
   }
 }
 

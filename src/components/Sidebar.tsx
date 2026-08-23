@@ -30,16 +30,15 @@ export default function Sidebar({
   // 按名称首字母排序（中文走拼音序，不改动原始数组顺序）
   const sorted = [...tasks].sort((a, b) => a.task.name.localeCompare(b.task.name, 'zh-Hans-CN'))
   return (
-    <aside className="w-[280px] min-w-[280px] bg-panel border-r border-line flex flex-col">
+    <aside className="w-70 min-w-70 bg-panel border-r border-line flex flex-col">
       {/* macOS：整个头部为透明拖拽区（按住空白拖动窗口），顶部加高内边距让标题避开左上角红绿灯；
           「+ 添加任务」按钮由 Tauri 脚本自动豁免，保持正常点击 */}
       <div
-        className={`${IS_MAC ? 'pt-9' : ''} px-4 pb-4 border-b border-line flex flex-col gap-3 ${
+        className={`${IS_MAC ? 'pt-8' : 'pt-3'} px-4 pb-3 border-b border-line flex flex-col gap-3 ${
           IS_MAC ? 'cursor-default' : ''
         }`}
         {...(IS_MAC ? { 'data-tauri-drag-region': 'deep' } : {})}
       >
-        <h1 className="m-0 text-base font-semibold">服务管理器</h1>
         <button className="btn-primary" onClick={onAdd}>
           + 添加任务
         </button>
@@ -51,7 +50,7 @@ export default function Sidebar({
             <li
               key={t.task.id}
               className={`flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer select-none transition-colors ${
-                t.task.id === selectedId ? 'bg-accent/[0.18]' : 'hover:bg-white/5'
+                t.task.id === selectedId ? 'bg-accent/18' : 'hover:bg-white/5'
               }`}
               onClick={() => onSelect(t.task.id)}
             >

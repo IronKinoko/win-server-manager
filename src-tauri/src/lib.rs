@@ -458,26 +458,41 @@ fn path_extensions() -> Vec<String> {
     }
 }
 
-// 在 PATH 中查找可执行文件。
-// Windows 遵循 cmd 的解析语义：依次尝试 PATHEXT 中的扩展名，
-// 因此 npm（只有 npm.cmd 批处理 + 无扩展名 POSIX shim）能正确命中 npm.cmd，
-// 而不是无扩展名的 shim（直接 spawn 会报 os error 193「不是有效的 Win32 应用程序」）。
+// 生成在单个目录内应尝试的候选文件名，遵循 Windows 命令行解析语义：
+//   - 名称未带可执行扩展名（node / npm）→ 按 PATHEXT 顺序补全（node → node.exe …）。
+//     这样 npm（只有 npm.cmd 批处理 + 无扩展名 POSIX shim）能命中 npm.cmd，
+//     而不是无扩展名的 shim（直接 spawn 会报 os error 193「不是有效的 Win32 应用程序」）。
+//   - 名称已带可执行扩展名（frpc.exe / app.bat）→ 只用原名本身，
+//     避免叠加出 frpc.exe.EXE 这类不存在的候选，从而漏掉真实存在的文件。
+// 非 Windows：可执行文件不带扩展名，直接用原名。
+fn candidate_names(name: &str) -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let lower = name.to_ascii_lowercase();
+        let has_exec_ext = [".exe", ".com", ".bat", ".cmd"].iter().any(|e| lower.ends_with(e));
+        if has_exec_ext {
+            return vec![name.to_string()];
+        }
+        path_extensions()
+            .into_iter()
+            .map(|ext| format!("{}{}", name, ext))
+            .collect()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![name.to_string()]
+    }
+}
+
+// 在 PATH 中查找可执行文件（见 candidate_names 的候选名生成规则）。
 fn find_in_path(name: &str) -> Option<PathBuf> {
     let path_var = std::env::var("PATH").ok()?;
-    #[cfg(target_os = "windows")]
-    let exts = path_extensions();
-    #[cfg(not(target_os = "windows"))]
-    let exts = vec![String::new()];
+    let names = candidate_names(name);
     for dir in std::env::split_paths(&path_var) {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        for ext in &exts {
-            let candidate = if ext.is_empty() {
-                name.to_string()
-            } else {
-                format!("{}{}", name, ext)
-            };
+        for candidate in &names {
             let p = dir.join(candidate);
             if p.is_file() {
                 return std::fs::canonicalize(&p).ok();
@@ -511,10 +526,30 @@ fn extend_with_pathtext(_raw: &str) -> Option<PathBuf> {
     None
 }
 
+// 在指定目录内按 candidate_names 的候选名规则查找。
+// 命中的相对路径保持相对形式返回，由进程 current_dir 定位，
+// 避免对尚不存在的子进程工作目录做 canonicalize 失败。
+fn find_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
+    for candidate in candidate_names(name) {
+        let p = dir.join(&candidate);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 // 解析纯程序名：
-//   Windows 按 shell 语义 PATH 优先（输入 npm 时终端也是搜 PATH + PATHEXT，不会找当前目录）；
-//   其他平台保持原行为：当前目录本地文件优先，其次 PATH。
-fn resolve_bare_name(name: &str) -> Option<PathBuf> {
+//   先在任务工作目录中查找（含 PATHEXT 补全），再按平台 shell 语义回退 PATH。
+//   这样「工作目录下放个脚本，exe 只写名字」的用法无需填完整路径。
+fn resolve_bare_name(name: &str, workdir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = workdir {
+        if !dir.as_os_str().is_empty() {
+            if let Some(p) = find_in_dir(dir, name) {
+                return Some(p);
+            }
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         find_in_path(name).or_else(|| std::fs::canonicalize(name).ok())
@@ -528,11 +563,12 @@ fn resolve_bare_name(name: &str) -> Option<PathBuf> {
 }
 
 // 解析任务的「可执行文件」字段，支持三种写法：
-//   1. 绝对/相对路径：C:\server\app.exe
-//   2. 仅名称（自动搜索 PATH）：node
+//   1. 绝对/相对路径：C:\server\app.exe（相对路径基于任务工作目录解析）
+//   2. 仅名称（先搜任务工作目录，再搜 PATH）：node / 同目录下的脚本
 //   3. 完整命令行（首个 token 为程序，其余并入参数）：node "D:\AI\server.js"
+// workdir 为 None（未配置工作目录）时不做本地优先查找。
 // 返回 (程序路径, 从命令行解析出的附加参数)
-fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
+fn resolve_command(raw: &str, workdir: Option<&Path>) -> Result<(PathBuf, Vec<String>), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("可执行文件为空".into());
@@ -541,26 +577,37 @@ fn resolve_command(raw: &str) -> Result<(PathBuf, Vec<String>), String> {
     let head = tokens[0].clone();
     let rest = tokens[1..].to_vec();
     let program = if head.contains('\\') || head.contains('/') {
-        // 带路径分隔符：按路径解析；Windows 上路径无扩展名（如裸写 npm）时按 PATHEXT 补全
-        std::fs::canonicalize(&head)
+        // 带路径分隔符：绝对路径直接解析，相对路径基于任务工作目录；
+        // Windows 上路径无扩展名（如裸写 npm）时按 PATHEXT 补全
+        let base = match workdir {
+            Some(dir) if !Path::new(&head).is_absolute() => dir.join(&head),
+            _ => PathBuf::from(&head),
+        };
+        std::fs::canonicalize(&base)
             .ok()
-            .or_else(|| extend_with_pathtext(&head))
+            .or_else(|| extend_with_pathtext(base.to_string_lossy().as_ref()))
     } else {
-        // 纯名称：按平台 shell 语义解析（见 resolve_bare_name）
-        resolve_bare_name(&head)
+        // 纯名称：先查任务工作目录，再回退 PATH（见 resolve_bare_name）
+        resolve_bare_name(&head, workdir)
     };
     match program {
         Some(p) => Ok((p, rest)),
         None => Err(if rest.is_empty() {
             format!("可执行文件不存在: {}", head)
         } else {
-            format!("找不到可执行文件 {}（不在当前目录也不在 PATH 中）", head)
+            format!("找不到可执行文件 {}（不在工作目录也不在 PATH 中）", head)
         }),
     }
 }
 
 fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<u32, String> {
-    let (exe_path, extra_args) = resolve_command(&task.exe_path)?;
+    // 先确定任务配置的工作目录：可执行文件解析从该目录开始（纯名称优先本地查找）
+    let explicit_workdir = if task.working_dir.trim().is_empty() {
+        None
+    } else {
+        Some(Path::new(task.working_dir.trim()))
+    };
+    let (exe_path, extra_args) = resolve_command(&task.exe_path, explicit_workdir)?;
 
     // 每次启动清空该任务的日志与前端输出，保证输出区只反映本次运行
     {
@@ -591,15 +638,16 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
 
     let mut cmd = tokio::process::Command::new(&exe_path);
 
-    let working_dir = if task.working_dir.trim().is_empty() {
-        exe_path
+    // 未配置工作目录时沿用原行为：使用 exe 所在目录
+    let working_dir = match explicit_workdir {
+        Some(dir) => dir.to_path_buf(),
+        None => exe_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
-    } else {
-        Path::new(&task.working_dir)
+            .to_path_buf(),
     };
-    cmd.current_dir(working_dir);
+    cmd.current_dir(&working_dir);
 
     // 参数 = 专用参数框的内容（同样做引号感知的拆分）+「可执行文件」里附带的命令行参数
     let mut args: Vec<String> = parse_command_line(&task.arguments);
