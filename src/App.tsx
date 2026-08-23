@@ -6,7 +6,7 @@ import type { Task, TaskInfo, OutputEvent, StatusEvent } from './types'
 import Sidebar from './components/Sidebar'
 import TaskForm from './components/TaskForm'
 import ControlBar from './components/ControlBar'
-import OutputPanel, { type OutputLine, type OutputPanelHandle } from './components/OutputPanel'
+import OutputPanel, { type OutputLine } from './components/OutputPanel'
 import SettingsModal, { type SettingsModalHandle } from './components/SettingsModal'
 
 const MAX_OUTPUT_LINES = 500
@@ -20,7 +20,6 @@ function App() {
   const [form, setForm] = useState<Task | null>(null)
   const [dirty, setDirty] = useState(false)
   const outputRef = useRef<HTMLDivElement>(null)
-  const panelRef = useRef<OutputPanelHandle>(null)
   const settingsRef = useRef<SettingsModalHandle>(null)
 
   // 终端区域高度（所有任务通用，持久化到 localStorage）
@@ -124,23 +123,6 @@ function App() {
       unlisteners.forEach((fn) => fn())
     }
   }, [refreshTasks])
-
-  // Ctrl/Cmd + A 仅全选终端输出区内容，避免选中其它 UI（焦点在 xterm 容器内才拦截）
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const isSelectAll = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a'
-      if (!isSelectAll) return
-      const outputEl = outputRef.current
-      if (!outputEl) return
-      const active = document.activeElement
-      if (!active || !outputEl.contains(active)) return
-      event.preventDefault()
-      panelRef.current?.selectAll()
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
 
   const selectTask = async (id: string) => {
     // 切走已停止的任务时顺手清掉它的日志（内存 + 磁盘）
@@ -299,8 +281,6 @@ function App() {
               onClearLog={handleClearLog}
             />
             <OutputPanel
-              ref={panelRef}
-              taskId={selected.task.id}
               lines={outputs[selected.task.id] ?? EMPTY_OUTPUT_LINES}
               height={terminalHeight}
               outputRef={outputRef}

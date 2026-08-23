@@ -111,7 +111,135 @@
   transform: translateX(16px);
 }
 
-/* ==================== 滚动条 ==================== */
+.ansi-output {
+  .ansi-black-fg {
+    color: #8b8b8b;
+  }
+
+  .ansi-red-fg {
+    color: #ff7b72;
+  }
+
+  .ansi-green-fg {
+    color: #7ee787;
+  }
+
+  .ansi-yellow-fg {
+    color: #f2cc60;
+  }
+
+  .ansi-blue-fg {
+    color: #79c0ff;
+  }
+
+  .ansi-magenta-fg {
+    color: #d2a8ff;
+  }
+
+  .ansi-cyan-fg {
+    color: #56d4dd;
+  }
+
+  .ansi-white-fg {
+    color: #e6edf3;
+  }
+
+  .ansi-bright-black-fg {
+    color: #a8a8a8;
+  }
+
+  .ansi-bright-red-fg {
+    color: #ff938a;
+  }
+
+  .ansi-bright-green-fg {
+    color: #9bea9f;
+  }
+
+  .ansi-bright-yellow-fg {
+    color: #ffe08a;
+  }
+
+  .ansi-bright-blue-fg {
+    color: #9ecbff;
+  }
+
+  .ansi-bright-magenta-fg {
+    color: #e2c2ff;
+  }
+
+  .ansi-bright-cyan-fg {
+    color: #7ee7ef;
+  }
+
+  .ansi-bright-white-fg {
+    color: #ffffff;
+  }
+
+  .ansi-black-bg {
+    background-color: #4a4a4a;
+  }
+
+  .ansi-red-bg {
+    background-color: #c94a4a;
+  }
+
+  .ansi-green-bg {
+    background-color: #3d9148;
+  }
+
+  .ansi-yellow-bg {
+    background-color: #b89535;
+  }
+
+  .ansi-blue-bg {
+    background-color: #3973b8;
+  }
+
+  .ansi-magenta-bg {
+    background-color: #9146b8;
+  }
+
+  .ansi-cyan-bg {
+    background-color: #318e96;
+  }
+
+  .ansi-white-bg {
+    background-color: #dce3ea;
+  }
+
+  .ansi-bright-black-bg {
+    background-color: #686868;
+  }
+
+  .ansi-bright-red-bg {
+    background-color: #e56767;
+  }
+
+  .ansi-bright-green-bg {
+    background-color: #63bd6d;
+  }
+
+  .ansi-bright-yellow-bg {
+    background-color: #d8b957;
+  }
+
+  .ansi-bright-blue-bg {
+    background-color: #619bd6;
+  }
+
+  .ansi-bright-magenta-bg {
+    background-color: #b46bd6;
+  }
+
+  .ansi-bright-cyan-bg {
+    background-color: #5cc8cf;
+  }
+
+  .ansi-bright-white-bg {
+    background-color: #ffffff;
+  }
+}
 
 ::-webkit-scrollbar {
   width: 8px;

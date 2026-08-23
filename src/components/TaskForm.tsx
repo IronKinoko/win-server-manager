@@ -1,4 +1,5 @@
 import type { Task } from '../types'
+import AutoSizeTextarea from './AutoSizeTextarea'
 
 interface TaskFormProps {
   form: Task
@@ -24,13 +25,29 @@ export default function TaskForm({
       key={form.id}
       className="p-4 border-b border-line flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto"
     >
-      <div className="flex flex-col gap-2">
-        <label className="text-xs text-fg-muted">任务名称</label>
-        <input
-          className="field-input"
-          value={form.name}
-          onChange={(e) => onChange({ name: e.target.value })}
-        />
+      <div className="flex gap-3">
+        <div className="flex flex-col gap-2 flex-1 min-w-0">
+          <label className="text-xs text-fg-muted">任务名称</label>
+          <input
+            className="field-input"
+            value={form.name}
+            onChange={(e) => onChange({ name: e.target.value })}
+          />
+        </div>
+        <div className="flex flex-col gap-2 flex-1 min-w-0">
+          <label className="text-xs text-fg-muted">工作目录</label>
+          <div className="flex gap-2">
+            <input
+              className="field-input flex-1"
+              value={form.working_dir}
+              placeholder="留空则使用 exe 所在目录"
+              onChange={(e) => onChange({ working_dir: e.target.value })}
+            />
+            <button className="btn-base shrink-0" onClick={onBrowseDir}>
+              浏览…
+            </button>
+          </div>
+        </div>
       </div>
       <div className="flex flex-col gap-2">
         <label className="text-xs text-fg-muted">可执行文件</label>
@@ -53,27 +70,13 @@ export default function TaskForm({
         <label className="text-xs text-fg-muted">
           启动参数（每行可写多个参数，运行时自动拆分）
         </label>
-        <textarea
+        <AutoSizeTextarea
           rows={3}
-          className="field-input font-mono resize-y min-h-[60px] leading-relaxed"
+          className="field-input font-mono resize-none leading-relaxed"
           value={form.arguments}
           placeholder={'--port 8080\n--config config.yaml'}
           onChange={(e) => onChange({ arguments: e.target.value })}
         />
-      </div>
-      <div className="flex flex-col gap-2">
-        <label className="text-xs text-fg-muted">工作目录</label>
-        <div className="flex gap-2">
-          <input
-            className="field-input flex-1"
-            value={form.working_dir}
-            placeholder="留空则使用 exe 所在目录"
-            onChange={(e) => onChange({ working_dir: e.target.value })}
-          />
-          <button className="btn-base shrink-0" onClick={onBrowseDir}>
-            浏览…
-          </button>
-        </div>
       </div>
       <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
         <span className="text-sm text-fg">崩溃自动重启</span>
