@@ -101,7 +101,7 @@ export default function TaskForm({
             启动参数（每行可写多个参数，运行时自动拆分）
           </label>
           <AutoSizeTextarea
-            className="field-input font-mono resize-none leading-relaxed min-h-21"
+            className="field-input font-mono resize-none leading-relaxed min-h-21 py-2"
             value={form.arguments}
             placeholder={'--port 8080\n--config config.yaml'}
             onChange={(e) => onChange({ arguments: e.target.value })}
