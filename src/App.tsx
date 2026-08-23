@@ -70,25 +70,7 @@ function App() {
   // 加载任务列表 + 监听后端事件
   useEffect(() => {
     let cancelled = false
-    refreshTasks().then(async (list) => {
-      // 自动恢复：若设置开启，重启上次退出前正在运行中的任务
-      // （StrictMode 下 effect 可能执行两次，cancelled 保证只有一条恢复链路生效）
-      try {
-        if (cancelled) return
-        const autoRestore = await invoke<boolean>('get_setting_auto_restore')
-        if (!autoRestore) return
-        const ids = await invoke<string[]>('get_running_task_ids')
-        for (const id of ids) {
-          if (cancelled) break
-          const t = list.find((x) => x.task.id === id)
-          if (t && t.status !== 'running') {
-            await invoke('start_task', { id }).catch(() => {})
-          }
-        }
-      } catch {
-        // 自动恢复失败不影响正常使用
-      }
-    })
+    refreshTasks()
     const unlisteners: Array<() => void> = []
     const track = (fn: () => void) => {
       if (cancelled) {
@@ -181,6 +163,7 @@ function App() {
       working_dir: '',
       env_vars: [],
       auto_restart: false,
+      auto_run_on_launch: false,
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()

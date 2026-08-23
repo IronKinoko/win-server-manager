@@ -11,6 +11,8 @@ export interface Task {
   working_dir: string
   env_vars: EnvVar[]
   auto_restart: boolean
+  // 应用启动时自动运行该任务
+  auto_run_on_launch: boolean
 }
 
 export type TaskStatus = 'stopped' | 'running' | 'crashed'

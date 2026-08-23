@@ -30,6 +30,9 @@ pub struct Task {
     pub working_dir: String,
     pub env_vars: Vec<EnvVar>,
     pub auto_restart: bool,
+    // 应用启动时自动运行；旧版 tasks.json 缺少该字段时默认关闭
+    #[serde(default)]
+    pub auto_run_on_launch: bool,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -68,8 +71,6 @@ fn default_keep_alive() -> bool {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct AppSettings {
-    #[serde(default)]
-    auto_restore: bool,
     #[serde(default)]
     silent_start: bool,
     // 是否允许关闭主窗口后在后台（托盘）继续运行
@@ -124,6 +125,17 @@ impl TaskManager {
         self.starting.lock().unwrap().remove(id);
     }
 
+    /// 取出所有开启「应用启动时自动运行」的任务 ID
+    fn auto_run_on_launch_ids(&self) -> Vec<String> {
+        self.tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, t)| t.auto_run_on_launch)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// 清空全部任务日志文件（退出时随停止任务一并调用）
     fn clear_all_logs(&self) {
         let dir = self.data_dir.join("logs");
@@ -169,7 +181,6 @@ impl TaskManager {
             }
         }
         AppSettings {
-            auto_restore: false,
             silent_start: false,
             keep_alive_on_close: default_keep_alive(),
         }
@@ -325,81 +336,6 @@ fn is_pid_alive(pid: u32) -> bool {
     false
 }
 
-// 启动前检查是否有来自同一文件的同名进程在运行，若有则终止，保证单实例
-fn kill_same_name_processes(exe_path: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let file_name = Path::new(exe_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        // 仅处理 .exe，避免 .bat/.cmd 误杀 cmd.exe
-        if !file_name.to_ascii_lowercase().ends_with(".exe") {
-            return false;
-        }
-        // 规范化任务可执行文件路径，用于与进程实际路径比对
-        let target = std::fs::canonicalize(exe_path)
-            .unwrap_or_else(|_| PathBuf::from(exe_path))
-            .to_string_lossy()
-            .to_ascii_lowercase();
-
-        // 通过 PowerShell 查询同名进程的 PID 与完整路径
-        let ps_cmd = format!(
-            "Get-Process -Name '{}' -ErrorAction SilentlyContinue | ForEach-Object {{ \"$($_.Id) $($_.Path)\" }}",
-            file_name
-        );
-        let output = match std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-            .creation_flags(0x08000000)
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        let text = decode_output(&output.stdout);
-
-        // 逐行解析 "PID 路径"，仅终止路径与任务文件一致的进程
-        let mut killed = false;
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let mut parts = line.splitn(2, ' ');
-            let pid = match parts.next().and_then(|p| p.parse::<u32>().ok()) {
-                Some(pid) => pid,
-                None => continue,
-            };
-            let proc_path = parts.next().unwrap_or("").trim();
-            if proc_path.is_empty() {
-                continue;
-            }
-            let proc_path = std::fs::canonicalize(proc_path)
-                .unwrap_or_else(|_| PathBuf::from(proc_path))
-                .to_string_lossy()
-                .to_ascii_lowercase();
-            if proc_path == target {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .creation_flags(0x08000000)
-                    .spawn();
-                killed = true;
-            }
-        }
-        if killed {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        killed
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = exe_path;
-        false
-    }
-}
-
 // ==================== 核心启动逻辑 ====================
 
 // 按空白拆分命令行，保留双引号内的内容。
@@ -469,7 +405,9 @@ fn candidate_names(name: &str) -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
         let lower = name.to_ascii_lowercase();
-        let has_exec_ext = [".exe", ".com", ".bat", ".cmd"].iter().any(|e| lower.ends_with(e));
+        let has_exec_ext = [".exe", ".com", ".bat", ".cmd"]
+            .iter()
+            .any(|e| lower.ends_with(e));
         if has_exec_ext {
             return vec![name.to_string()];
         }
@@ -620,21 +558,6 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
         "task-output-clear",
         serde_json::json!({ "task_id": task.id }),
     );
-
-    // 启动前清理同名进程，保证单实例（按解析出的真实程序路径判断）
-    if kill_same_name_processes(exe_path.to_string_lossy().as_ref()) {
-        let _ = app.emit(
-            "task-output",
-            OutputEvent {
-                task_id: task.id.clone(),
-                source: "stderr".into(),
-                text: format!(
-                    "[单实例] 检测到同名进程 {} 正在运行，已终止旧实例\n",
-                    exe_path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
-                ),
-            },
-        );
-    }
 
     let mut cmd = tokio::process::Command::new(&exe_path);
 
@@ -1126,18 +1049,6 @@ fn clear_task_log(state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), 
 // ---- 设置与运行快照 ----
 
 #[tauri::command]
-fn get_setting_auto_restore(state: State<'_, Arc<TaskManager>>) -> bool {
-    state.load_settings().auto_restore
-}
-
-#[tauri::command]
-fn set_setting_auto_restore(state: State<'_, Arc<TaskManager>>, value: bool) {
-    let mut s = state.load_settings();
-    s.auto_restore = value;
-    state.save_settings(&s);
-}
-
-#[tauri::command]
 fn get_setting_silent_start(state: State<'_, Arc<TaskManager>>) -> bool {
     state.load_settings().silent_start
 }
@@ -1220,15 +1131,12 @@ fn get_running_task_ids(state: State<'_, Arc<TaskManager>>) -> Vec<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 // 统一退出流程（托盘「退出应用」与禁用后台继续运行时关闭主窗口共用）：
-// 若开启「自动恢复任务」则保存运行快照并停止全部任务，下次启动时恢复；
-// 未开启则进程保持在后台运行，也不做恢复
+// 保存运行快照并停止全部任务，下次启动时恢复；
 fn perform_quit(app: &AppHandle) {
     QUITTING.store(true, Ordering::SeqCst);
     if let Some(tm) = app.try_state::<Arc<TaskManager>>() {
-        if tm.load_settings().auto_restore {
-            tm.sync_running_set();
-            stop_all_tasks(app, &tm);
-        }
+        tm.sync_running_set();
+        stop_all_tasks(app, &tm);
         // 无论何种模式，退出都清空所有任务日志，重启后不残留上一轮输出
         tm.clear_all_logs();
     }
@@ -1251,6 +1159,38 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                 }
+            }
+
+            // 自动运行：逐个拉起开启「应用启动时自动运行」的任务。
+            // setup 阶段不在 tokio 运行时上下文中，故显式调度到 Tauri 全局运行时；
+            // 与手动启动共用原子启动槽位，已在运行的任务会被跳过
+            let auto_ids = task_manager.auto_run_on_launch_ids();
+            if !auto_ids.is_empty() {
+                let handle = app.handle().clone();
+                let tm = task_manager.clone();
+                tauri::async_runtime::spawn(async move {
+                    for id in auto_ids {
+                        let Some(task) = tm.tasks.lock().unwrap().get(&id).cloned() else {
+                            continue;
+                        };
+                        if !tm.try_begin_start(&id) {
+                            continue;
+                        }
+                        let result = do_start_task(&handle, &tm, &task);
+                        tm.end_start(&id);
+                        if let Err(e) = result {
+                            // 启动失败也写入该任务的输出区，界面上可见原因
+                            let _ = handle.emit(
+                                "task-output",
+                                OutputEvent {
+                                    task_id: id.clone(),
+                                    source: "stderr".into(),
+                                    text: format!("[启动失败] {}\n", e),
+                                },
+                            );
+                        }
+                    }
+                });
             }
 
             // 托盘图标在 tauri.conf.json 的 app.trayIcon 中定义，这里为其设置右键菜单
@@ -1322,8 +1262,6 @@ pub fn run() {
             stop_task,
             get_task_log,
             clear_task_log,
-            get_setting_auto_restore,
-            set_setting_auto_restore,
             get_setting_silent_start,
             set_setting_silent_start,
             get_setting_keep_alive,

@@ -8,14 +8,10 @@ export interface SettingsModalHandle {
 const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_props, ref) {
   const [visible, setVisible] = useState(false)
   const [autoStart, setAutoStart] = useState(false)
-  const [autoRestore, setAutoRestore] = useState(false)
   const [silentStart, setSilentStart] = useState(false)
   const [keepAlive, setKeepAlive] = useState(true)
 
   useEffect(() => {
-    invoke<boolean>('get_setting_auto_restore')
-      .then(setAutoRestore)
-      .catch(() => {})
     invoke<boolean>('get_setting_silent_start')
       .then(setSilentStart)
       .catch(() => {})
@@ -34,11 +30,6 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
   const toggleAutoStart = (v: boolean) => {
     setAutoStart(v)
     invoke('set_autostart', { value: v }).catch(() => {})
-  }
-
-  const toggleAutoRestore = (v: boolean) => {
-    setAutoRestore(v)
-    invoke('set_setting_auto_restore', { value: v }).catch(() => {})
   }
 
   const toggleSilentStart = (v: boolean) => {
@@ -97,22 +88,6 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
                 type="checkbox"
                 checked={keepAlive}
                 onChange={(e) => toggleKeepAlive(e.target.checked)}
-              />
-              <span className="switch-slider" />
-            </label>
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1 min-w-0">
-              <span className="text-sm text-fg">自动恢复任务</span>
-              <span className="text-xs text-fg-muted leading-snug">
-                退出时停止全部运行中的任务，重新打开应用后自动恢复它们
-              </span>
-            </div>
-            <label className="switch shrink-0">
-              <input
-                type="checkbox"
-                checked={autoRestore}
-                onChange={(e) => toggleAutoRestore(e.target.checked)}
               />
               <span className="switch-slider" />
             </label>

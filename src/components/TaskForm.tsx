@@ -118,6 +118,17 @@ export default function TaskForm({
             <span className="switch-slider" />
           </label>
         </div>
+        <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
+          <span className="text-sm text-fg">应用启动时自动运行</span>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={form.auto_run_on_launch}
+              onChange={(e) => onChange({ auto_run_on_launch: e.target.checked })}
+            />
+            <span className="switch-slider" />
+          </label>
+        </div>
         <div className="flex flex-col gap-2">
           <label className="text-xs text-fg-muted">环境变量</label>
           <div className="flex flex-col gap-2">
