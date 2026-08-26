@@ -14,16 +14,15 @@ interface OutputPanelProps {
   onMouseDownResize: (e: React.MouseEvent) => void
 }
 
-// 终端配色：默认白在深底上偏灰，粗体白提亮到纯白（xterm 习惯）
-const ansifier = new AnsiUp()
-ansifier.use_classes = true
-ansifier.faintStyle = 'opacity:0.6;'
-
 function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPanelProps) {
   // ANSI -> HTML：SGR/CSI/OSC 交给 ansi_up 解析，换行由 <pre> 的 whitespace-pre-wrap 保持
   const html = useMemo(() => {
     if (lines.length === 0) return ''
     const text = lines.map((l) => l.text.replace(/\r\n/g, '\n')).join('\n')
+    const ansifier = new AnsiUp()
+    ansifier.use_classes = true
+    ansifier.faintStyle = 'opacity:0.6;'
+
     return ansifier.ansi_to_html(text)
   }, [lines])
 
