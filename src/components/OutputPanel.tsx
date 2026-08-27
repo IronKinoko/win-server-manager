@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { AnsiUp } from 'ansi_up'
 
 /** 一行输出（来源 + 原始文本，保留后端发来的 ANSI 序列） */
@@ -26,11 +26,17 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
     return ansifier.ansi_to_html(text)
   }, [lines])
 
+  const shouldScrollToBottomRef = useRef(true)
+
   // 新输出到达时自动滚到底部
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = outputRef.current
     if (!el) return
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 50) el.scrollTop = el.scrollHeight
+    if (shouldScrollToBottomRef.current) el.scrollTop = el.scrollHeight
+
+    return () => {
+      shouldScrollToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+    }
   }, [lines, outputRef])
 
   // Ctrl/Cmd + A 仅全选输出区内容：监听器直接挂在容器上，

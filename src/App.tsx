@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -9,7 +9,6 @@ import ControlBar from './components/ControlBar'
 import OutputPanel, { type OutputLine } from './components/OutputPanel'
 import SettingsModal, { type SettingsModalHandle } from './components/SettingsModal'
 
-const MAX_OUTPUT_LINES = 500
 // 稳定引用：避免每次渲染给 OutputPanel 传新的空数组，触发无谓的终端重置
 const EMPTY_OUTPUT_LINES: OutputLine[] = []
 
@@ -90,7 +89,7 @@ function App() {
       const normalized = text.replace(/\r?\n$/, '')
       setOutputs((prev) => {
         const lines = [...(prev[task_id] ?? []), { source, text: normalized }]
-        return { ...prev, [task_id]: lines.slice(-MAX_OUTPUT_LINES) }
+        return { ...prev, [task_id]: lines }
       })
     }).then(track)
 
@@ -140,10 +139,7 @@ function App() {
             : rawLines
         // 日志文件不区分 stdout/stderr，一律按普通文本回显
         const lines: OutputLine[] = textLines.map((text) => ({ source: 'stdout', text }))
-        setOutputs((prev) => ({
-          ...prev,
-          [id]: lines.slice(-MAX_OUTPUT_LINES),
-        }))
+        setOutputs((prev) => ({ ...prev, [id]: lines }))
       }
     }
     setDirty(false)
@@ -202,10 +198,7 @@ function App() {
       // 启动失败（如可执行文件不存在）：把后端返回的错误显示到该任务的输出区
       setOutputs((prev) => ({
         ...prev,
-        [id]: [
-          ...(prev[id] ?? []),
-          { source: 'stdout' as const, text: `[错误] ${String(e)}` },
-        ].slice(-MAX_OUTPUT_LINES),
+        [id]: [...(prev[id] ?? []), { source: 'stdout' as const, text: `[错误] ${String(e)}` }],
       }))
     }
   }
@@ -258,9 +251,8 @@ function App() {
             <p>从左侧选择任务，或点击「添加任务」创建新任务</p>
           </div>
         ) : (
-          <>
+          <Fragment key={form.id}>
             <TaskForm
-              key={form.id}
               form={form}
               dirty={dirty}
               onChange={updateForm}
@@ -284,7 +276,7 @@ function App() {
               outputRef={outputRef}
               onMouseDownResize={handleResizeStart}
             />
-          </>
+          </Fragment>
         )}
       </main>
 
