@@ -1143,6 +1143,12 @@ fn perform_quit(app: &AppHandle) {
     app.exit(0);
 }
 
+// 前端「完全退出」按钮：与托盘「退出应用」同流程，强制完整退出（不隐藏到托盘）
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    perform_quit(&app)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1277,7 +1283,8 @@ pub fn run() {
             set_setting_keep_alive,
             get_autostart,
             set_autostart,
-            get_running_task_ids
+            get_running_task_ids,
+            quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

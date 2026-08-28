@@ -1,66 +1,34 @@
-import { useEffect, useRef, useState } from 'react'
 import type { Task } from '../types'
 import AutoSizeTextarea from './AutoSizeTextarea'
+import { IconClose, IconPlus } from './icons'
 
 interface TaskFormProps {
   form: Task
-  dirty: boolean
   onChange: (patch: Partial<Task>) => void
-  onSave: () => void
-  onDelete: () => void
+  // 任意控件失焦时触发，由 App 决定是否保存
+  onBlur: () => void
   onBrowseExe: () => void
   onBrowseDir: () => void
 }
 
 export default function TaskForm({
   form,
-  dirty,
   onChange,
-  onSave,
-  onDelete,
+  onBlur,
   onBrowseExe,
   onBrowseDir,
 }: TaskFormProps) {
-  // 删除二次确认：第一次点击后进入确认态，3 秒内再次点击才真正删除
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
-  const confirmTimer = useRef<number | undefined>(undefined)
-
-  // 组件按 form.id 重新挂载（见 App.tsx），切换任务时确认态自然重置；卸载前清理定时器
-  useEffect(() => () => window.clearTimeout(confirmTimer.current), [])
-
-  const handleDeleteClick = () => {
-    if (!confirmingDelete) {
-      setConfirmingDelete(true)
-      window.clearTimeout(confirmTimer.current)
-      confirmTimer.current = window.setTimeout(() => setConfirmingDelete(false), 3000)
-      return
-    }
-    window.clearTimeout(confirmTimer.current)
-    setConfirmingDelete(false)
-    onDelete()
-  }
-
   return (
     <div className="flex flex-col flex-1 min-h-0 border-b border-line">
-      {/* Header：左侧可随时编辑的任务名称，右侧操作按钮 */}
+      {/* Header：可随时编辑的任务名称（失焦即自动保存，不再有手动保存按钮） */}
       <div className="shrink-0 flex items-center gap-3 bg-panel border-b border-line px-4 py-3">
         <input
           className="h-9 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 text-base font-medium text-fg outline-none transition-colors hover:border-line focus:border-accent placeholder:text-fg-muted/60"
           value={form.name}
           placeholder="输入任务名称…"
           onChange={(e) => onChange({ name: e.target.value })}
+          onBlur={onBlur}
         />
-        <div className="flex shrink-0 gap-2">
-          <button className="btn-primary" onClick={onSave} disabled={!dirty}>
-            保存
-          </button>
-          <button
-            className={`btn-danger ${confirmingDelete ? 'bg-danger text-white' : ''}`}
-            onClick={handleDeleteClick}
-          >
-            {confirmingDelete ? '确认删除？' : '删除'}
-          </button>
-        </div>
       </div>
 
       {/* Body：其余配置项 */}
@@ -73,6 +41,7 @@ export default function TaskForm({
               value={form.working_dir}
               placeholder="留空则使用 exe 所在目录"
               onChange={(e) => onChange({ working_dir: e.target.value })}
+              onBlur={onBlur}
             />
             <button className="btn-base shrink-0" onClick={onBrowseDir}>
               浏览…
@@ -87,6 +56,7 @@ export default function TaskForm({
               value={form.exe_path}
               placeholder="D:\server\app.exe"
               onChange={(e) => onChange({ exe_path: e.target.value })}
+              onBlur={onBlur}
             />
             <button className="btn-base shrink-0" onClick={onBrowseExe}>
               浏览…
@@ -105,6 +75,7 @@ export default function TaskForm({
             value={form.arguments}
             placeholder={'--port 8080\n--config config.yaml'}
             onChange={(e) => onChange({ arguments: e.target.value })}
+            onBlur={onBlur}
           />
         </div>
         <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
@@ -114,6 +85,7 @@ export default function TaskForm({
               type="checkbox"
               checked={form.auto_restart}
               onChange={(e) => onChange({ auto_restart: e.target.checked })}
+              onBlur={onBlur}
             />
             <span className="switch-slider" />
           </label>
@@ -125,6 +97,7 @@ export default function TaskForm({
               type="checkbox"
               checked={form.auto_run_on_launch}
               onChange={(e) => onChange({ auto_run_on_launch: e.target.checked })}
+              onBlur={onBlur}
             />
             <span className="switch-slider" />
           </label>
@@ -144,6 +117,7 @@ export default function TaskForm({
                     )
                     onChange({ env_vars })
                   }}
+                  onBlur={onBlur}
                 />
                 <input
                   className="field-input flex-1"
@@ -155,20 +129,22 @@ export default function TaskForm({
                     )
                     onChange({ env_vars })
                   }}
+                  onBlur={onBlur}
                 />
                 <button
-                  className="btn-base px-2 py-1 text-xs"
+                  className="btn-base px-2 py-1 text-xs flex items-center justify-center"
                   onClick={() => onChange({ env_vars: form.env_vars.filter((_, j) => j !== i) })}
                 >
-                  ✕
+                  <IconClose className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
             <button
-              className="btn-base px-2 py-1 text-xs self-start"
+              className="btn-base px-2 py-1 text-xs self-start flex items-center gap-1 leading-none"
               onClick={() => onChange({ env_vars: [...form.env_vars, { key: '', value: '' }] })}
             >
-              + 添加变量
+              <IconPlus className="w-3.5 h-3.5 shrink-0" />
+              添加变量
             </button>
           </div>
         </div>

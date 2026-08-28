@@ -1,4 +1,5 @@
 import type { TaskStatus } from '../types'
+import { IconExpand, IconPlay, IconStop } from './icons'
 
 function statusInfo(s: TaskStatus) {
   switch (s) {
@@ -34,12 +35,14 @@ export default function ControlBar({
   return (
     <div className="flex items-center gap-3 px-5 py-3 border-b border-line shrink-0">
       {status === 'running' ? (
-        <button className="btn-stop" onClick={onStop}>
-          ■ 停止 (PID {pid})
+        <button className="btn-stop flex items-center gap-1.5 leading-none" onClick={onStop}>
+          <IconStop className="w-4 h-4 shrink-0" />
+          停止 (PID {pid})
         </button>
       ) : (
-        <button className="btn-start" onClick={onStart}>
-          ▶ 启动
+        <button className="btn-start flex items-center gap-1.5 leading-none" onClick={onStart}>
+          <IconPlay className="w-4 h-4 shrink-0" />
+          启动
         </button>
       )}
       <span className={`text-xs px-3 py-1 rounded-full bg-input-bg border ${si.cls}`}>
@@ -50,11 +53,11 @@ export default function ControlBar({
         清空输出
       </button>
       <button
-        className="btn-base px-2"
+        className="btn-base px-2 flex items-center justify-center"
         onClick={onToggleHeight}
         title={`快速切换终端高度（当前 ${terminalHeight}px）`}
       >
-        ⇕
+        <IconExpand className="w-4 h-4" />
       </button>
     </div>
   )

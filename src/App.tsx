@@ -8,6 +8,7 @@ import TaskForm from './components/TaskForm'
 import ControlBar from './components/ControlBar'
 import OutputPanel, { type OutputLine } from './components/OutputPanel'
 import SettingsModal, { type SettingsModalHandle } from './components/SettingsModal'
+import Modal from './components/Modal'
 
 // 稳定引用：避免每次渲染给 OutputPanel 传新的空数组，触发无谓的终端重置
 const EMPTY_OUTPUT_LINES: OutputLine[] = []
@@ -18,6 +19,10 @@ function App() {
   const [outputs, setOutputs] = useState<Record<string, OutputLine[]>>({})
   const [form, setForm] = useState<Task | null>(null)
   const [dirty, setDirty] = useState(false)
+  // 待确认删除的任务（Modal 二次确认）
+  const [deleteTarget, setDeleteTarget] = useState<TaskInfo | null>(null)
+  // 是否允许后台继续运行：开启时侧边栏左下角显示「完全退出」按钮
+  const [keepAlive, setKeepAlive] = useState(false)
   const outputRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<SettingsModalHandle>(null)
 
@@ -110,6 +115,13 @@ function App() {
     }
   }, [refreshTasks])
 
+  // 读取「允许后台继续运行」设置（运行中切换时由 SettingsModal 回调同步）
+  useEffect(() => {
+    invoke<boolean>('get_setting_keep_alive')
+      .then(setKeepAlive)
+      .catch(() => {})
+  }, [])
+
   const selectTask = async (id: string) => {
     // 切走已停止的任务时顺手清掉它的日志（内存 + 磁盘）
     if (selectedId && selectedId !== id) {
@@ -170,21 +182,50 @@ function App() {
 
   const handleSave = async () => {
     if (!form) return
-    const updated = await invoke<TaskInfo>('update_task', { task: form })
+    try {
+      const updated = await invoke<TaskInfo>('update_task', { task: form })
+      await refreshTasks()
+      setForm({ ...updated.task, env_vars: updated.task.env_vars.map((e) => ({ ...e })) })
+      setDirty(false)
+    } catch {
+      // 保存失败时保留 dirty，失焦或启动时可重试
+    }
+  }
+
+  // input 失焦即自动保存
+  const handleBlurSave = () => {
+    if (dirty) void handleSave()
+  }
+
+  // 复制任务：全新 ID（后端自动生成），名称追加「 Copy」；仅复制配置，不继承运行状态
+  const handleCopy = async (src: TaskInfo) => {
+    const task: Task = {
+      ...src.task,
+      id: '',
+      name: src.task.name + ' Copy',
+      env_vars: src.task.env_vars.map((e) => ({ ...e })),
+    }
+    const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()
-    setForm({ ...updated.task, env_vars: updated.task.env_vars.map((e) => ({ ...e })) })
+    setSelectedId(created.task.id)
+    setForm({ ...created.task, env_vars: created.task.env_vars.map((e) => ({ ...e })) })
     setDirty(false)
   }
 
-  const handleDelete = async () => {
-    if (!selected) return
-    if (!window.confirm(`确定删除任务「${selected.task.name}」吗？`)) return
-    if (selected.status !== 'stopped') {
-      await invoke('stop_task', { id: selected.task.id })
+  // 删除二次确认：由侧边栏菜单触发，确认后执行（运行中先停止）
+  const confirmDelete = async () => {
+    const target = deleteTarget
+    if (!target) return
+    setDeleteTarget(null)
+    if (target.status !== 'stopped') {
+      await invoke('stop_task', { id: target.task.id })
     }
-    await invoke('delete_task', { id: selected.task.id })
-    setSelectedId(null)
-    setForm(null)
+    await invoke('delete_task', { id: target.task.id })
+    if (selectedId === target.task.id) {
+      setSelectedId(null)
+      setForm(null)
+      setOutputs((prev) => ({ ...prev, [target.task.id]: [] }))
+    }
     await refreshTasks()
   }
 
@@ -242,7 +283,11 @@ function App() {
         selectedId={selectedId}
         onSelect={selectTask}
         onAdd={handleAdd}
+        onCopy={handleCopy}
+        onDelete={(t) => setDeleteTarget(t)}
         onOpenSettings={() => settingsRef.current?.open()}
+        keepAlive={keepAlive}
+        onQuit={() => invoke('quit_app')}
       />
 
       <main className="flex flex-col flex-1 min-w-0">
@@ -254,10 +299,8 @@ function App() {
           <Fragment key={form.id}>
             <TaskForm
               form={form}
-              dirty={dirty}
               onChange={updateForm}
-              onSave={handleSave}
-              onDelete={handleDelete}
+              onBlur={handleBlurSave}
               onBrowseExe={handleBrowseExe}
               onBrowseDir={handleBrowseDir}
             />
@@ -280,7 +323,26 @@ function App() {
         )}
       </main>
 
-      <SettingsModal ref={settingsRef} />
+      <SettingsModal ref={settingsRef} onKeepAliveChange={setKeepAlive} />
+
+      <Modal
+        open={!!deleteTarget}
+        title="删除任务"
+        onClose={() => setDeleteTarget(null)}
+        panelClassName="w-auto max-w-[90vw]"
+        footer={
+          <>
+            <button className="btn-base" onClick={() => setDeleteTarget(null)}>
+              取消
+            </button>
+            <button className="btn-stop" onClick={confirmDelete}>
+              删除
+            </button>
+          </>
+        }
+      >
+        <p className="m-0 text-sm">确定删除任务「{deleteTarget?.task.name}」吗？</p>
+      </Modal>
     </div>
   )
 }

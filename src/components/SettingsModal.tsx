@@ -1,11 +1,20 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import Modal from './Modal'
 
 export interface SettingsModalHandle {
   open: () => void
 }
 
-const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_props, ref) {
+interface SettingsModalProps {
+  // 「允许后台继续运行」被切换时通知外层（侧边栏「完全退出」按钮据此显示/隐藏）
+  onKeepAliveChange?: (value: boolean) => void
+}
+
+const SettingsModal = forwardRef<SettingsModalHandle, SettingsModalProps>(function SettingsModal(
+  { onKeepAliveChange },
+  ref,
+) {
   const [visible, setVisible] = useState(false)
   const [autoStart, setAutoStart] = useState(false)
   const [silentStart, setSilentStart] = useState(false)
@@ -39,78 +48,61 @@ const SettingsModal = forwardRef<SettingsModalHandle>(function SettingsModal(_pr
 
   const toggleKeepAlive = (v: boolean) => {
     setKeepAlive(v)
+    onKeepAliveChange?.(v)
     invoke('set_setting_keep_alive', { value: v }).catch(() => {})
   }
 
   if (!visible) return null
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-1000"
-      onClick={() => setVisible(false)}
-    >
-      <div
-        className="bg-panel border border-line rounded-lg min-w-90 max-w-120 w-[90%] shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-line">
-          <h2 className="m-0 text-base font-semibold">设置</h2>
-          <button className="btn-base px-3 py-1 text-xs" onClick={() => setVisible(false)}>
-            ✕
-          </button>
+    <Modal open={visible} title="设置" onClose={() => setVisible(false)}>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-sm text-fg">开机自启</span>
+          <span className="text-xs text-fg-muted leading-snug">登录 Windows 后自动启动本应用</span>
         </div>
-        <div className="p-4 flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1 min-w-0">
-              <span className="text-sm text-fg">开机自启</span>
-              <span className="text-xs text-fg-muted leading-snug">
-                登录 Windows 后自动启动本应用
-              </span>
-            </div>
-            <label className="switch shrink-0">
-              <input
-                type="checkbox"
-                checked={autoStart}
-                onChange={(e) => toggleAutoStart(e.target.checked)}
-              />
-              <span className="switch-slider" />
-            </label>
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1 min-w-0">
-              <span className="text-sm text-fg">允许后台继续运行</span>
-              <span className="text-xs text-fg-muted leading-snug">
-                开启：关闭主窗口仅隐藏到系统托盘；关闭：关闭主窗口即退出应用
-              </span>
-            </div>
-            <label className="switch shrink-0">
-              <input
-                type="checkbox"
-                checked={keepAlive}
-                onChange={(e) => toggleKeepAlive(e.target.checked)}
-              />
-              <span className="switch-slider" />
-            </label>
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1 min-w-0">
-              <span className="text-sm text-fg">静默启动</span>
-              <span className="text-xs text-fg-muted leading-snug">
-                启动后不显示主窗口，直接进入系统托盘
-              </span>
-            </div>
-            <label className="switch shrink-0">
-              <input
-                type="checkbox"
-                checked={silentStart}
-                onChange={(e) => toggleSilentStart(e.target.checked)}
-              />
-              <span className="switch-slider" />
-            </label>
-          </div>
-        </div>
+        <label className="switch shrink-0">
+          <input
+            type="checkbox"
+            checked={autoStart}
+            onChange={(e) => toggleAutoStart(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
       </div>
-    </div>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-sm text-fg">允许后台继续运行</span>
+          <span className="text-xs text-fg-muted leading-snug">
+            开启：关闭主窗口仅隐藏到系统托盘；关闭：关闭主窗口即退出应用
+          </span>
+        </div>
+        <label className="switch shrink-0">
+          <input
+            type="checkbox"
+            checked={keepAlive}
+            onChange={(e) => toggleKeepAlive(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="text-sm text-fg">静默启动</span>
+          <span className="text-xs text-fg-muted leading-snug">
+            启动后不显示主窗口，直接进入系统托盘
+          </span>
+        </div>
+        <label className="switch shrink-0">
+          <input
+            type="checkbox"
+            checked={silentStart}
+            onChange={(e) => toggleSilentStart(e.target.checked)}
+          />
+          <span className="switch-slider" />
+        </label>
+      </div>
+    </Modal>
   )
 })
 
