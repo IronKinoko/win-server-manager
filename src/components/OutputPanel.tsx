@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { AnsiUp } from 'ansi_up'
 
 /** 一行输出（来源 + 原始文本，保留后端发来的 ANSI 序列） */
@@ -26,17 +26,27 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
     return ansifier.ansi_to_html(text)
   }, [lines])
 
-  const shouldScrollToBottomRef = useRef(true)
+  // 实时跟踪视口是否贴近底部（随容器 scroll 事件更新）。
+  // 原先在 effect 清理函数里判断“是否贴底”，而清理函数运行在新内容布局之后：
+  // 一条新消息增高超过 50px 时，会把“原本在底部”误判为“不在底部”，
+  // 导致后续新消息不再自动滚到最下方。
+  const nearBottomRef = useRef(true)
 
-  // 新输出到达时自动滚到底部
-  useLayoutEffect(() => {
+  useEffect(() => {
     const el = outputRef.current
     if (!el) return
-    if (shouldScrollToBottomRef.current) el.scrollTop = el.scrollHeight
-
-    return () => {
-      shouldScrollToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+    const sync = () => {
+      nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50
     }
+    el.addEventListener('scroll', sync)
+    return () => el.removeEventListener('scroll', sync)
+  }, [outputRef])
+
+  // 新输出到达且用户贴近底部时，把滚动条定位到最下方
+  useLayoutEffect(() => {
+    const el = outputRef.current
+    if (!el || !nearBottomRef.current) return
+    el.scrollTop = el.scrollHeight
   }, [lines, outputRef])
 
   // Ctrl/Cmd + A 仅全选输出区内容：监听器直接挂在容器上，
