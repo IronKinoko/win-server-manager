@@ -38,9 +38,9 @@ Windows 桌面任务/进程管理器。基于 Tauri 2 + React 19 + TypeScript + 
 | `pnpm tauri dev`                                   | 启动开发环境（Vite 固定端口 1420） |
 | `pnpm build`                                       | 前端类型检查 + 生产构建            |
 | `cargo check --manifest-path src-tauri/Cargo.toml` | Rust 侧编译检查                    |
-| `pnpm release`                                     | `tauri build`，生成安装包                |
-| `pnpm lint`                                        | ESLint 代码检查                          |
-| `pnpm format` / `pnpm format:check`                | Prettier 格式化 / 格式校验               |
+| `pnpm release`                                     | `tauri build`，生成安装包          |
+| `pnpm lint`                                        | ESLint 代码检查                    |
+| `pnpm format` / `pnpm format:check`                | Prettier 格式化 / 格式校验         |
 
 已配置提交前检查（husky + lint-staged）：提交时自动跑 `tsc --noEmit`，并对暂存文件执行 `eslint --fix` + `prettier --write`（TS/TSX）、`prettier --write`（CSS）、`rustfmt`（Rust）。Prettier 风格为无分号 + 单引号，见 [.prettierrc.json](.prettierrc.json)。
 

@@ -86,6 +86,12 @@ struct TaskState {
     stop_tx: Option<tokio::sync::watch::Sender<bool>>,
 }
 
+struct DockerRunCommand {
+    args: Vec<String>,
+    stop_args: Vec<String>,
+    container_name: String,
+}
+
 pub struct TaskManager {
     tasks: Mutex<HashMap<String, Task>>,
     states: Mutex<HashMap<String, TaskState>>,
@@ -538,6 +544,106 @@ fn resolve_command(raw: &str, workdir: Option<&Path>) -> Result<(PathBuf, Vec<St
     }
 }
 
+// 换行已经由 parse_command_line 视为普通空白。只匹配相邻的 `docker run`，
+// 避免误把镜像名、环境变量值等文本当作 Docker 子命令。
+fn prepare_docker_run(task_id: &str, mut args: Vec<String>) -> Option<DockerRunCommand> {
+    let run_index = args.windows(2).position(|pair| {
+        pair[0].eq_ignore_ascii_case("docker") && pair[1].eq_ignore_ascii_case("run")
+    })? + 1;
+    let name_index = args
+        .iter()
+        .enumerate()
+        .skip(run_index + 1)
+        .find_map(|(index, arg)| {
+            if arg == "--name" {
+                args.get(index + 1)
+                    .filter(|name| !name.starts_with('-'))
+                    .map(|_| index)
+            } else {
+                None
+            }
+        });
+    let container_name = if let Some(index) = name_index {
+        args[index + 1].clone()
+    } else if let Some(name) = args
+        .iter()
+        .skip(run_index + 1)
+        .find_map(|arg| arg.strip_prefix("--name="))
+        .filter(|name| !name.is_empty())
+    {
+        name.to_string()
+    } else {
+        let suffix: String = task_id
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-') {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let name = format!("win-server-manager-{}", suffix);
+        args.insert(run_index + 1, format!("--name={}", name));
+        name
+    };
+
+    let mut stop_args = args[..run_index - 1].to_vec();
+    stop_args.extend([
+        "docker".to_string(),
+        "stop".to_string(),
+        container_name.clone(),
+    ]);
+    Some(DockerRunCommand {
+        args,
+        stop_args,
+        container_name,
+    })
+}
+
+// Docker 容器由守护进程拥有，结束 docker CLI 或 wsl.exe 后仍可能继续运行。
+// 对由本任务启动的 `docker run`，使用相同入口（原生 Docker 或 WSL）发送 docker stop。
+fn stop_docker_container(task: &Task) -> Result<Option<String>, String> {
+    let explicit_workdir = if task.working_dir.trim().is_empty() {
+        None
+    } else {
+        Some(Path::new(task.working_dir.trim()))
+    };
+    let (program, extra_args) = resolve_command(&task.exe_path, explicit_workdir)?;
+    let mut args = parse_command_line(&task.arguments);
+    args.extend(extra_args);
+    let Some(docker) = prepare_docker_run(&task.id, args) else {
+        return Ok(None);
+    };
+
+    let mut command = std::process::Command::new(program);
+    command.args(&docker.stop_args);
+    if let Some(workdir) = explicit_workdir {
+        command.current_dir(workdir);
+    }
+    for env in &task.env_vars {
+        command.env(&env.key, &env.value);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("执行 docker stop 失败: {}", e))?;
+    if output.status.success() {
+        Ok(Some(docker.container_name))
+    } else {
+        let stderr = decode_output(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("docker stop 退出状态: {}", output.status)
+        } else {
+            format!("docker stop 失败: {}", stderr)
+        })
+    }
+}
+
 fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<u32, String> {
     // 先确定任务配置的工作目录：可执行文件解析从该目录开始（纯名称优先本地查找）
     let explicit_workdir = if task.working_dir.trim().is_empty() {
@@ -575,6 +681,9 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     // 参数 = 专用参数框的内容（同样做引号感知的拆分）+「可执行文件」里附带的命令行参数
     let mut args: Vec<String> = parse_command_line(&task.arguments);
     args.extend(extra_args);
+    let original_args = args.clone();
+    let docker_run = prepare_docker_run(&task.id, args);
+    let args = docker_run.map_or(original_args, |docker| docker.args);
     cmd.args(&args);
 
     for env in &task.env_vars {
@@ -927,11 +1036,18 @@ fn update_task(state: State<'_, Arc<TaskManager>>, task: Task) -> Result<TaskInf
 
 #[tauri::command]
 fn delete_task(state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), String> {
+    let task = {
+        let tasks = state.tasks.lock().unwrap();
+        tasks.get(&id).cloned()
+    };
     let pid = {
         let states = state.states.lock().unwrap();
         states.get(&id).and_then(|s| s.pid)
     };
 
+    if let Some(task) = task {
+        let _ = stop_docker_container(&task);
+    }
     state.request_stop(&id);
 
     if let Some(pid) = pid {
@@ -975,12 +1091,26 @@ async fn start_task(
 #[tauri::command]
 fn stop_task(app: AppHandle, state: State<'_, Arc<TaskManager>>, id: String) -> Result<(), String> {
     let tm = state.inner().clone();
+    let task = {
+        let tasks = tm.tasks.lock().unwrap();
+        tasks.get(&id).cloned().ok_or("任务不存在")?
+    };
 
     let pid = {
         let states = tm.states.lock().unwrap();
         states.get(&id).and_then(|s| s.pid)
     };
 
+    if let Err(e) = stop_docker_container(&task) {
+        let _ = app.emit(
+            "task-output",
+            OutputEvent {
+                task_id: id.clone(),
+                source: "stderr".into(),
+                text: format!("[Docker 停止失败] {}\n", e),
+            },
+        );
+    }
     tm.request_stop(&id);
 
     if let Some(pid) = pid {
@@ -1011,10 +1141,26 @@ fn stop_all_tasks(app: &AppHandle, tm: &Arc<TaskManager>) {
             .collect()
     };
     for id in ids {
+        let task = {
+            let tasks = tm.tasks.lock().unwrap();
+            tasks.get(&id).cloned()
+        };
         let pid = {
             let states = tm.states.lock().unwrap();
             states.get(&id).and_then(|s| s.pid)
         };
+        if let Some(task) = task {
+            if let Err(e) = stop_docker_container(&task) {
+                let _ = app.emit(
+                    "task-output",
+                    OutputEvent {
+                        task_id: id.clone(),
+                        source: "stderr".into(),
+                        text: format!("[Docker 停止失败] {}\n", e),
+                    },
+                );
+            }
+        }
         tm.request_stop(&id);
         if let Some(pid) = pid {
             kill_process_tree(pid);
