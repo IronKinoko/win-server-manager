@@ -1,18 +1,14 @@
-export interface EnvVar {
-  key: string
-  value: string
-}
-
 export interface Task {
   id: string
   name: string
   exe_path: string
   arguments: string
   working_dir: string
-  env_vars: EnvVar[]
   auto_restart: boolean
   // 应用启动时自动运行该任务
   auto_run_on_launch: boolean
+  // 自定义美化输出代码（JS：function pretty(lines: string[]): string[]），随任务持久化
+  pretty_code?: string
 }
 
 export type TaskStatus = 'stopped' | 'running' | 'crashed'

@@ -1,6 +1,7 @@
+import { useEffect, useMemo } from 'react'
 import type { Task } from '../types'
 import AutoSizeTextarea from './AutoSizeTextarea'
-import { IconClose, IconPlus } from './icons'
+import { compilePretty, setPrettyCode } from '../prettyOutput'
 
 interface TaskFormProps {
   form: Task
@@ -18,6 +19,16 @@ export default function TaskForm({
   onBrowseExe,
   onBrowseDir,
 }: TaskFormProps) {
+  const prettyCode = form.pretty_code ?? ''
+
+  // 把当前任务的美化代码同步给 OutputPanel（模块级 store，见 prettyOutput.ts），
+  // 依赖 form 值而非 onChange，因此切换任务选中时也会自动更新
+  useEffect(() => {
+    setPrettyCode(prettyCode)
+  }, [prettyCode])
+
+  // 代码有效性检查：非空且编译失败时在 textarea 下方提示
+  const prettyError = useMemo(() => compilePretty(prettyCode).error, [prettyCode])
   return (
     <div className="flex flex-col flex-1 min-h-0 border-b border-line">
       {/* Header：可随时编辑的任务名称（失焦即自动保存，不再有手动保存按钮） */}
@@ -103,50 +114,21 @@ export default function TaskForm({
           </label>
         </div>
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-fg-muted">环境变量</label>
-          <div className="flex flex-col gap-2">
-            {form.env_vars.map((ev, i) => (
-              <div key={i} className="flex gap-2">
-                <input
-                  className="field-input basis-2/5 grow-0"
-                  placeholder="KEY"
-                  value={ev.key}
-                  onChange={(e) => {
-                    const env_vars = form.env_vars.map((x, j) =>
-                      j === i ? { ...x, key: e.target.value } : x,
-                    )
-                    onChange({ env_vars })
-                  }}
-                  onBlur={onBlur}
-                />
-                <input
-                  className="field-input flex-1"
-                  placeholder="VALUE"
-                  value={ev.value}
-                  onChange={(e) => {
-                    const env_vars = form.env_vars.map((x, j) =>
-                      j === i ? { ...x, value: e.target.value } : x,
-                    )
-                    onChange({ env_vars })
-                  }}
-                  onBlur={onBlur}
-                />
-                <button
-                  className="btn-base px-2 py-1 text-xs flex items-center justify-center"
-                  onClick={() => onChange({ env_vars: form.env_vars.filter((_, j) => j !== i) })}
-                >
-                  <IconClose className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-            <button
-              className="btn-base px-2 py-1 text-xs self-start flex items-center gap-1 leading-none"
-              onClick={() => onChange({ env_vars: [...form.env_vars, { key: '', value: '' }] })}
-            >
-              <IconPlus className="w-3.5 h-3.5 shrink-0" />
-              添加变量
-            </button>
-          </div>
+          <label className="text-xs text-fg-muted">美化输出</label>
+          <AutoSizeTextarea
+            className="field-input font-mono resize-none leading-relaxed min-h-14 py-2"
+            value={prettyCode}
+            placeholder="function pretty( lines: string[], { chalk } ) : string[]"
+            onChange={(e) => onChange({ pretty_code: e.target.value })}
+            onBlur={onBlur}
+          />
+          <span className="text-xs text-fg-muted">
+            写一段 JS：每次输出增量追加时调用 pretty(新增行, {'{ chalk }'}
+            )，返回美化后的行（可返回不同行数，可用 chalk 上色）
+          </span>
+          {prettyCode.trim() && prettyError ? (
+            <span className="text-xs text-danger">美化代码无效：{prettyError}</span>
+          ) : null}
         </div>
       </div>
     </div>

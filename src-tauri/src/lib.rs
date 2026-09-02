@@ -16,23 +16,20 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 // ==================== 数据模型 ====================
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct EnvVar {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
 pub struct Task {
     pub id: String,
     pub name: String,
     pub exe_path: String,
     pub arguments: String,
     pub working_dir: String,
-    pub env_vars: Vec<EnvVar>,
     pub auto_restart: bool,
     // 应用启动时自动运行；旧版 tasks.json 缺少该字段时默认关闭
     #[serde(default)]
     pub auto_run_on_launch: bool,
+    // 自定义美化输出代码（前端 new Function 求值）；旧版 tasks.json 缺少该字段时视为 None，
+    // 为空时不落盘，保持 tasks.json 整洁
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pretty_code: Option<String>,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -280,6 +277,157 @@ fn decode_output(bytes: &[u8]) -> String {
     }
     let (s, _, _) = encoding_rs::GBK.decode(bytes);
     s.to_string()
+}
+
+// ==================== Windows ConPTY ====================
+//
+// 常规「管道 + CREATE_NO_WINDOW」方式启动的子进程把 stdout 看作管道（isatty 失败），
+// 多数程序（git / cargo / node / .NET 等）会自行关掉 ANSI 颜色；
+// 本模块用伪控制台（ConPTY，Win10+）让子进程认为自己挂在真实控制台上，
+// 其 ANSI 输出（stdout+stderr 合并、带转义序列）从 pty 输出管完整读回。
+
+#[cfg(target_os = "windows")]
+mod conpty {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct Coord {
+        pub x: i16,
+        pub y: i16,
+    }
+
+    #[repr(C)]
+    struct SecurityAttributes {
+        n_length: u32,
+        lp_security_descriptor: usize,
+        b_inherit_handle: i32,
+    }
+
+    type CreatePseudoConsoleFn = extern "system" fn(
+        size: *const Coord,
+        h_input: usize,
+        h_output: usize,
+        dw_flags: u32,
+        ph_pty: *mut usize,
+    ) -> i32;
+
+    type ClosePseudoConsoleFn = extern "system" fn(h_pty: usize) -> i32;
+
+    extern "system" {
+        fn LoadLibraryA(lp_lib_filename: *const u8) -> usize;
+        fn GetProcAddress(h_module: usize, lp_proc_name: *const u8) -> usize;
+        fn CreatePipe(
+            ph_read_pipe: *mut usize,
+            ph_write_pipe: *mut usize,
+            lp_pipe_attributes: *const SecurityAttributes,
+            n_size: usize,
+        ) -> i32;
+    }
+
+    // ConPTY 入口点在 Win8.1 及更早系统不存在，按序从各版本 dll 动态查找；
+    // 查找成功后不 FreeLibrary，让函数指针在整个进程生命周期内有效
+    fn load_conpty_api() -> Option<(CreatePseudoConsoleFn, ClosePseudoConsoleFn)> {
+        use std::ffi::CString;
+        unsafe {
+            let names: [CString; 3] = [
+                CString::new("api-ms-win-conpty-l1-1-0.dll").unwrap(),
+                CString::new("api-ms-win-conpty-l1-1-1.dll").unwrap(),
+                CString::new("kernel32.dll").unwrap(),
+            ];
+            for name in &names {
+                let lib = LoadLibraryA(name.as_ptr() as *const u8);
+                if lib == 0 {
+                    continue;
+                }
+                let create = GetProcAddress(
+                    lib,
+                    CString::new("CreatePseudoConsole").unwrap().as_ptr() as *const u8,
+                );
+                let close = GetProcAddress(
+                    lib,
+                    CString::new("ClosePseudoConsole").unwrap().as_ptr() as *const u8,
+                );
+                if create != 0 && close != 0 {
+                    return Some((
+                        std::mem::transmute::<usize, CreatePseudoConsoleFn>(create),
+                        std::mem::transmute::<usize, ClosePseudoConsoleFn>(close),
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    fn create_inheritable_pipe(size: usize) -> Option<(OwnedHandle, OwnedHandle)> {
+        unsafe {
+            let sa = SecurityAttributes {
+                n_length: std::mem::size_of::<SecurityAttributes>() as u32,
+                lp_security_descriptor: 0,
+                b_inherit_handle: 1,
+            };
+            let mut read: usize = 0;
+            let mut write: usize = 0;
+            if CreatePipe(&mut read, &mut write, &sa, size) == 0 {
+                return None;
+            }
+            Some((
+                OwnedHandle::from_raw_handle(read as *mut std::ffi::c_void),
+                OwnedHandle::from_raw_handle(write as *mut std::ffi::c_void),
+            ))
+        }
+    }
+
+    /// 伪控制台实例：
+    /// - `handle`：交给子进程 stdin/stdout/stderr 的 pty 句柄（用 try_clone 复制使用）
+    /// - `output_read`：输出管道读端，供构建读取流
+    /// - 输入管道写端由结构体持有，drop 时关闭，保持 pty 输入管道存活
+    pub struct Pty {
+        pub handle: OwnedHandle,
+        pub output_read: OwnedHandle,
+        #[allow(dead_code)] // 仅用于保持打开，从不读取
+        input_write: OwnedHandle,
+    }
+
+    /// 创建 ConPTY；失败（如 Win8.1 及以下）返回 None，调用方回退到普通管道
+    pub fn create_pty(width: i16, height: i16) -> Option<Pty> {
+        let api = load_conpty_api()?;
+        let (input_read, input_write) = create_inheritable_pipe(0)?;
+        let (output_read, output_write) = create_inheritable_pipe(1 << 20)?;
+        let mut pty: usize = 0;
+        let size = Coord {
+            x: width,
+            y: height,
+        };
+        if (api.0)(
+            &size,
+            input_read.as_raw_handle() as usize,
+            output_write.as_raw_handle() as usize,
+            0,
+            &mut pty,
+        ) == 0
+        {
+            return None;
+        }
+        // CreatePseudoConsole 内部持有 input_read / output_write 的副本，
+        // 本进程可以立刻释放它们（与 WindowsTerminal 的做法一致）
+        drop(input_read);
+        drop(output_write);
+        Some(Pty {
+            handle: unsafe { OwnedHandle::from_raw_handle(pty as *mut std::ffi::c_void) },
+            output_read,
+            input_write,
+        })
+    }
+
+    impl Pty {
+        /// 关闭伪控制台（尽力而为：子进程退出后 pty 通常已随之销毁）
+        pub fn close(&self) {
+            if let Some((_, close)) = load_conpty_api() {
+                (close)(self.handle.as_raw_handle() as usize);
+            }
+        }
+    }
 }
 
 // 同步杀死进程树并确认其真正终止。
@@ -621,9 +769,6 @@ fn stop_docker_container(task: &Task) -> Result<Option<String>, String> {
     if let Some(workdir) = explicit_workdir {
         command.current_dir(workdir);
     }
-    for env in &task.env_vars {
-        command.env(&env.key, &env.value);
-    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -642,6 +787,123 @@ fn stop_docker_container(task: &Task) -> Result<Option<String>, String> {
             format!("docker stop 失败: {}", stderr)
         })
     }
+}
+
+// ConPTY 输出流包装：AsyncRead 委托给输出管道文件；
+// drop 时（读取结束/任务停止）调用 ClosePseudoConsole 并释放各管道句柄
+#[cfg(target_os = "windows")]
+struct PtyReader {
+    inner: tokio::fs::File,
+    pty: conpty::Pty,
+}
+
+#[cfg(target_os = "windows")]
+impl tokio::io::AsyncRead for PtyReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncRead::poll_read(std::pin::Pin::new(&mut self.inner), cx, buf)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for PtyReader {
+    fn drop(&mut self) {
+        self.pty.close();
+    }
+}
+
+// 读取子进程输出流：按 \n 切块（保留行尾换行与 ANSI 序列），
+// 逐块发给前端并追加写入日志文件；解码规则见 decode_output（UTF-8 失败回退 GBK）
+fn spawn_output_reader(
+    app: &AppHandle,
+    id: &str,
+    log_path: &Path,
+    source: &str,
+    reader: impl tokio::io::AsyncRead + std::marker::Unpin + Send + 'static,
+) {
+    let app = app.clone();
+    let id = id.to_string();
+    let source = source.to_string();
+    let log_path = log_path.to_path_buf();
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut buf = [0u8; 8192];
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok();
+
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) => {
+                    if !line_buf.is_empty() {
+                        let text = decode_output(&line_buf);
+                        if !text.is_empty() {
+                            let _ = app.emit(
+                                "task-output",
+                                OutputEvent {
+                                    task_id: id.clone(),
+                                    source: source.clone(),
+                                    text: text.clone(),
+                                },
+                            );
+                            if let Some(ref mut f) = log_file {
+                                use std::io::Write;
+                                let _ = f.write_all(text.as_bytes());
+                            }
+                        }
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    line_buf.extend_from_slice(&buf[..n]);
+                    if let Some(last_nl) = line_buf.iter().rposition(|&b| b == b'\n') {
+                        let (complete, remaining) = line_buf.split_at(last_nl + 1);
+                        let text = decode_output(complete);
+                        if !text.is_empty() {
+                            let _ = app.emit(
+                                "task-output",
+                                OutputEvent {
+                                    task_id: id.clone(),
+                                    source: source.clone(),
+                                    text: text.clone(),
+                                },
+                            );
+                            if let Some(ref mut f) = log_file {
+                                use std::io::Write;
+                                let _ = f.write_all(text.as_bytes());
+                            }
+                        }
+                        line_buf = remaining.to_vec();
+                    }
+                    if line_buf.len() > 65536 {
+                        let text = decode_output(&line_buf);
+                        if !text.is_empty() {
+                            let _ = app.emit(
+                                "task-output",
+                                OutputEvent {
+                                    task_id: id.clone(),
+                                    source: source.clone(),
+                                    text: text.clone(),
+                                },
+                            );
+                            if let Some(ref mut f) = log_file {
+                                use std::io::Write;
+                                let _ = f.write_all(text.as_bytes());
+                            }
+                        }
+                        line_buf.clear();
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
 }
 
 fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<u32, String> {
@@ -686,15 +948,23 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     let args = docker_run.map_or(original_args, |docker| docker.args);
     cmd.args(&args);
 
-    for env in &task.env_vars {
-        cmd.env(&env.key, &env.value);
-    }
-
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
+    // Windows 10+ 优先使用 ConPTY：子进程能看到真实控制台，
+    // git/cargo/node 等程序会像真终端一样输出 ANSI 颜色；
+    // 创建失败（旧系统）时回退到普通管道 + 隐藏窗口（子进程看不到 TTY，颜色由程序自行决定）
+    #[cfg(target_os = "windows")]
+    let pty = conpty::create_pty(120, 40);
 
     #[cfg(target_os = "windows")]
-    {
+    if let Some(ref pty) = pty {
+        // pty 输出为合并后的单一流（stdout+stderr），统一从输出管道读回（见下方）
+        let make_stdio =
+            |p: &conpty::Pty| std::process::Stdio::from(p.handle.try_clone().expect("pty 句柄"));
+        cmd.stdin(make_stdio(pty));
+        cmd.stdout(make_stdio(pty));
+        cmd.stderr(make_stdio(pty));
+    } else {
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
         cmd.creation_flags(0x08000000);
     }
 
@@ -702,6 +972,8 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     // 停止时 kill -9 -{pid} 即可清理整棵进程树，对应 Windows 的 taskkill /T
     #[cfg(not(target_os = "windows"))]
     {
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
         cmd.process_group(0);
     }
 
@@ -732,177 +1004,41 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
         },
     );
 
-    let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
-    let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
-
     let log_dir = tm.data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let log_path = log_dir.join(format!("{}.log", task.id));
 
-    // ---- 异步读取 stdout ----
+    // ---- 读取子进程输出 ----
+    // Windows 10+ 使用 ConPTY：stdout+stderr 合并为单条 pty 流（source 统一记为 stdout）；
+    // 其余情况分别读取两条管道
+    #[cfg(target_os = "windows")]
     {
-        let app = app.clone();
-        let id = task.id.clone();
-        let log_path = log_path.clone();
-        tokio::spawn(async move {
-            let mut reader = tokio::io::BufReader::new(stdout);
-            let mut buf = [0u8; 8192];
-            let mut line_buf: Vec<u8> = Vec::new();
-            let mut log_file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .ok();
-
-            loop {
-                match reader.read(&mut buf).await {
-                    Ok(0) => {
-                        if !line_buf.is_empty() {
-                            let text = decode_output(&line_buf);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stdout".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    Ok(n) => {
-                        line_buf.extend_from_slice(&buf[..n]);
-                        if let Some(last_nl) = line_buf.iter().rposition(|&b| b == b'\n') {
-                            let (complete, remaining) = line_buf.split_at(last_nl + 1);
-                            let text = decode_output(complete);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stdout".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                            line_buf = remaining.to_vec();
-                        }
-                        if line_buf.len() > 65536 {
-                            let text = decode_output(&line_buf);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stdout".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                            line_buf.clear();
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        if let Some(pty) = pty {
+            let file = std::fs::File::from(pty.output_read.try_clone().expect("pty 读端"));
+            spawn_output_reader(
+                app,
+                &task.id,
+                &log_path,
+                "stdout",
+                PtyReader {
+                    inner: tokio::fs::File::from_std(file),
+                    pty,
+                },
+            );
+        } else {
+            let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
+            let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
+            spawn_output_reader(app, &task.id, &log_path, "stdout", stdout);
+            spawn_output_reader(app, &task.id, &log_path, "stderr", stderr);
+        }
     }
 
-    // ---- 异步读取 stderr ----
+    #[cfg(not(target_os = "windows"))]
     {
-        let app = app.clone();
-        let id = task.id.clone();
-        let log_path = log_path.clone();
-        tokio::spawn(async move {
-            let mut reader = tokio::io::BufReader::new(stderr);
-            let mut buf = [0u8; 8192];
-            let mut line_buf: Vec<u8> = Vec::new();
-            let mut log_file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .ok();
-
-            loop {
-                match reader.read(&mut buf).await {
-                    Ok(0) => {
-                        if !line_buf.is_empty() {
-                            let text = decode_output(&line_buf);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stderr".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    Ok(n) => {
-                        line_buf.extend_from_slice(&buf[..n]);
-                        if let Some(last_nl) = line_buf.iter().rposition(|&b| b == b'\n') {
-                            let (complete, remaining) = line_buf.split_at(last_nl + 1);
-                            let text = decode_output(complete);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stderr".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                            line_buf = remaining.to_vec();
-                        }
-                        if line_buf.len() > 65536 {
-                            let text = decode_output(&line_buf);
-                            if !text.is_empty() {
-                                let _ = app.emit(
-                                    "task-output",
-                                    OutputEvent {
-                                        task_id: id.clone(),
-                                        source: "stderr".into(),
-                                        text: text.clone(),
-                                    },
-                                );
-                                if let Some(ref mut f) = log_file {
-                                    use std::io::Write;
-                                    let _ = f.write_all(text.as_bytes());
-                                }
-                            }
-                            line_buf.clear();
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
+        let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
+        spawn_output_reader(app, &task.id, &log_path, "stdout", stdout);
+        spawn_output_reader(app, &task.id, &log_path, "stderr", stderr);
     }
 
     // ---- 进程监控（等待退出 + 自动重启）----
@@ -1434,4 +1570,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ==================== 测试 ====================
+
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+fn conpty_child_sees_tty_and_preserves_ansi() {
+    use std::io::Read;
+
+    let Some(pty) = conpty::create_pty(120, 40) else {
+        eprintln!("ConPTY 不可用（Win8.1 及以下），跳过测试");
+        return;
+    };
+
+    // 子进程：stdout 是真实控制台（TTY）时输出 ANSI 颜色，否则输出 PLAIN。
+    // 挂在 ConPTY 上时 isTTY 应为 true，输出里必须带 ESC 转义字节。
+    let script = "process.stdout.write(process.stdout.isTTY ? '\\x1b[31mRED\\x1b[0m' : 'PLAIN')";
+    let mut cmd = std::process::Command::new("node");
+    cmd.arg("-e").arg(script);
+    cmd.stdin(std::process::Stdio::from(pty.handle.try_clone().unwrap()));
+    cmd.stdout(std::process::Stdio::from(pty.handle.try_clone().unwrap()));
+    cmd.stderr(std::process::Stdio::from(pty.handle.try_clone().unwrap()));
+    let Ok(mut child) = cmd.spawn() else {
+        eprintln!("node 不可用，跳过测试");
+        return;
+    };
+    let mut out_file = std::fs::File::from(pty.output_read.try_clone().unwrap());
+    let mut out = Vec::new();
+    let _ = out_file.read_to_end(&mut out);
+    let status = child.wait().unwrap();
+    pty.close();
+
+    assert!(status.success(), "node 退出异常: {}", status);
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains('\u{1b}'),
+        "PTY 输出缺少 ANSI 转义字节: {:?}",
+        text
+    );
+    assert!(text.contains("RED"), "PTY 输出缺少期望文本: {:?}", text);
 }

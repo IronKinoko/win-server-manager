@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { compilePretty, prettyLines, usePrettyCode, type PrettyFn } from '../prettyOutput'
 
 /** 一行输出（来源 + 原始文本，保留后端发来的 ANSI 序列） */
 export interface OutputLine {
@@ -19,6 +20,16 @@ interface OutputPanelProps {
 function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPanelProps) {
   const terminalRef = useRef<Terminal | null>(null)
   const writtenLineCountRef = useRef(0)
+
+  // 表单「美化输出」里用户写的代码（模块级 store，见 prettyOutput.ts）。
+  // 增量渲染：只对新增的一批行调用 pretty，已写入终端的历史不再重排；
+  // 编译结果存入 ref，写新行时总是用当前代码（ref 同步声明在写入 effect 之前，保证顺序）
+  const prettyCode = usePrettyCode()
+  const prettyFn = useMemo(() => compilePretty(prettyCode).fn, [prettyCode])
+  const prettyRef = useRef<PrettyFn | null>(null)
+  useLayoutEffect(() => {
+    prettyRef.current = prettyFn
+  }, [prettyFn])
 
   // 实时跟踪视口是否贴近底部（随容器 scroll 事件更新）。
   // 原先在 effect 清理函数里判断“是否贴底”，而清理函数运行在新内容布局之后：
@@ -91,7 +102,12 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
 
     const newLines = lines.slice(writtenLineCountRef.current)
     if (newLines.length === 0) return
-    terminal.write(newLines.map((line) => `${line.text.replace(/\r\n/g, '\n')}\n`).join(''))
+    // 先归一化新增的一批行，再交给用户 pretty 函数美化（按增量批次调用），最后逐行写入终端；
+    // 美化抛错或返回异常时回退原文（见 prettyLines），不中断增量渲染
+    let texts = newLines.map((line) => line.text.replace(/\r\n/g, '\n'))
+    const pretty = prettyRef.current
+    if (pretty) texts = prettyLines(pretty, texts)
+    terminal.write(texts.map((text) => `${text}\n`).join(''))
     writtenLineCountRef.current = lines.length
     if (nearBottomRef.current) terminal.scrollToBottom()
   }, [lines, outputRef])

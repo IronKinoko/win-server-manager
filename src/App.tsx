@@ -175,7 +175,7 @@ function App() {
     setSelectedId(id)
     const t = tasks.find((x) => x.task.id === id)
     if (t) {
-      setForm({ ...t.task, env_vars: t.task.env_vars.map((e) => ({ ...e })) })
+      setForm({ ...t.task })
       if (t.status === 'stopped') {
         // 进入已停止的任务不回显历史：直接空终端，并清掉磁盘上残留的日志。
         // 以「进入时」的状态为准，避免离开时刻状态未及时刷新导致旧日志复活
@@ -209,14 +209,13 @@ function App() {
       exe_path: '',
       arguments: '',
       working_dir: '',
-      env_vars: [],
       auto_restart: false,
       auto_run_on_launch: false,
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()
     setSelectedId(created.task.id)
-    setForm({ ...created.task, env_vars: created.task.env_vars.map((e) => ({ ...e })) })
+    setForm({ ...created.task })
     setDirty(false)
   }
 
@@ -225,7 +224,7 @@ function App() {
     try {
       const updated = await invoke<TaskInfo>('update_task', { task: form })
       await refreshTasks()
-      setForm({ ...updated.task, env_vars: updated.task.env_vars.map((e) => ({ ...e })) })
+      setForm({ ...updated.task })
       setDirty(false)
     } catch {
       // 保存失败时保留 dirty，失焦或启动时可重试
@@ -243,12 +242,11 @@ function App() {
       ...src.task,
       id: '',
       name: src.task.name + ' Copy',
-      env_vars: src.task.env_vars.map((e) => ({ ...e })),
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()
     setSelectedId(created.task.id)
-    setForm({ ...created.task, env_vars: created.task.env_vars.map((e) => ({ ...e })) })
+    setForm({ ...created.task })
     setDirty(false)
   }
 
