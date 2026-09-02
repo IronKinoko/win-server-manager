@@ -102,16 +102,18 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
         className="h-1 bg-line cursor-row-resize shrink-0 transition-colors hover:bg-accent"
         onMouseDown={onMouseDownResize}
       />
-      <div
-        ref={outputRef}
-        className="xterm-output relative m-0 overflow-hidden pl-5 pt-3 bg-[#0c0c0c] tracking-normal shrink-0"
-        style={{ height }}
-      >
-        {lines.length === 0 ? (
-          <div className="pointer-events-none absolute inset-0 z-10 px-5 py-3 font-mono text-sm leading-6 text-[#5e6e82]">
-            (暂无输出)
-          </div>
-        ) : null}
+      <div className="pl-5 pt-3 bg-[#0c0c0c]">
+        <div
+          ref={outputRef}
+          className="xterm-output relative m-0 overflow-hidden tracking-normal shrink-0"
+          style={{ height }}
+        >
+          {lines.length === 0 ? (
+            <div className="pointer-events-none absolute inset-0 z-10 px-5 py-3 font-mono text-sm leading-6 text-[#5e6e82]">
+              (暂无输出)
+            </div>
+          ) : null}
+        </div>
       </div>
     </>
   )
