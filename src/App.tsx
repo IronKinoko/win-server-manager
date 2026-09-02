@@ -33,6 +33,46 @@ function App() {
   })
   const dragState = useRef<{ startY: number; startHeight: number } | null>(null)
 
+  // 侧边栏宽度（持久化到 localStorage，默认 352px 对应原 w-88）
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('sidebar-width')
+    const w = saved ? parseInt(saved, 10) : NaN
+    return Number.isNaN(w) ? 352 : Math.min(560, Math.max(240, w))
+  })
+
+  const handleSidebarResizeStart = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      const target = e.currentTarget as HTMLElement
+      // 指针捕获：拖拽中指针移出元素/窗口边缘也能持续收到 move/up 事件
+      target.setPointerCapture(e.pointerId)
+      const startX = e.clientX
+      const startWidth = sidebarWidth
+      const onMove = (ev: PointerEvent) => {
+        const delta = ev.clientX - startX
+        setSidebarWidth(Math.min(560, Math.max(240, startWidth + delta)))
+      }
+      const onUp = () => {
+        if (target.hasPointerCapture(e.pointerId)) target.releasePointerCapture(e.pointerId)
+        target.removeEventListener('pointermove', onMove)
+        target.removeEventListener('pointerup', onUp)
+        target.removeEventListener('pointercancel', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setSidebarWidth((w) => {
+          localStorage.setItem('sidebar-width', String(w))
+          return w
+        })
+      }
+      target.addEventListener('pointermove', onMove)
+      target.addEventListener('pointerup', onUp)
+      target.addEventListener('pointercancel', onUp)
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+    },
+    [sidebarWidth],
+  )
+
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
@@ -288,6 +328,8 @@ function App() {
         onOpenSettings={() => settingsRef.current?.open()}
         keepAlive={keepAlive}
         onQuit={() => invoke('quit_app')}
+        width={sidebarWidth}
+        onResizeStart={handleSidebarResizeStart}
       />
 
       <main className="flex flex-col flex-1 min-w-0">

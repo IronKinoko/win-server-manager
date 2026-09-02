@@ -25,6 +25,9 @@ interface SidebarProps {
   // 是否开启「允许后台继续运行」：开启时左下角显示「完全退出」按钮
   keepAlive: boolean
   onQuit: () => void
+  // 侧边栏宽度（px，由 App 持久化）与右边缘拖拽调整入口
+  width: number
+  onResizeStart: (e: React.PointerEvent) => void
 }
 
 export default function Sidebar({
@@ -37,6 +40,8 @@ export default function Sidebar({
   onOpenSettings,
   keepAlive,
   onQuit,
+  width,
+  onResizeStart,
 }: SidebarProps) {
   // 同一时刻最多展开一个任务的 "···" 菜单
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -56,7 +61,17 @@ export default function Sidebar({
   // 按名称首字母排序（中文走拼音序，不改动原始数组顺序）
   const sorted = [...tasks].sort((a, b) => a.task.name.localeCompare(b.task.name, 'zh-Hans-CN'))
   return (
-    <aside className="w-70 min-w-70 bg-panel border-r border-line flex flex-col">
+    <aside
+      className="shrink-0 relative bg-panel border-r border-line flex flex-col"
+      style={{ width }}
+    >
+      {/* 右边缘拖拽手柄：12px 命中区（不侵占行内 12px 内边距）+ 1px 常驻细线提示，hover 高亮；拖拽逻辑（边界 + 持久化）在 App 中 */}
+      <div
+        className="absolute top-0 right-0 h-full w-3 cursor-col-resize z-10 touch-none"
+        onPointerDown={onResizeStart}
+      >
+        <div className="h-full w-px ml-auto bg-white/25 hover:bg-accent transition-colors" />
+      </div>
       {/* macOS：整个头部为透明拖拽区（按住空白拖动窗口），顶部加高内边距让标题避开左上角红绿灯；
           「+ 添加任务」按钮由 Tauri 脚本自动豁免，保持正常点击 */}
       <div
