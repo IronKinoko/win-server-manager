@@ -109,7 +109,7 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
           style={{ height }}
         >
           {lines.length === 0 ? (
-            <div className="pointer-events-none absolute inset-0 z-10 px-5 py-3 font-mono text-sm leading-6 text-[#5e6e82]">
+            <div className="pointer-events-none absolute inset-0 z-10 font-mono text-sm leading-6 text-[#5e6e82]">
               (暂无输出)
             </div>
           ) : null}
