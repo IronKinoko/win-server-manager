@@ -7,7 +7,7 @@ export interface Task {
   auto_restart: boolean
   // 应用启动时自动运行该任务
   auto_run_on_launch: boolean
-  // 自定义美化输出代码（JS：function pretty(lines: string[]): string[]），随任务持久化
+  // 美化输出的函数体（JS 片段）；页面把外层壳 function pretty(lines, { chalk }) { … } 渲染为固定文本，随任务持久化
   pretty_code?: string
 }
 

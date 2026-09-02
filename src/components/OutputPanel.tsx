@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { compilePretty, prettyLines, usePrettyCode, type PrettyFn } from '../prettyOutput'
+import { compilePretty, prettyLines, type PrettyFn } from '../prettyOutput'
 
 /** 一行输出（来源 + 原始文本，保留后端发来的 ANSI 序列） */
 export interface OutputLine {
@@ -15,17 +15,20 @@ interface OutputPanelProps {
   height: number
   outputRef: React.RefObject<HTMLDivElement | null>
   onMouseDownResize: (e: React.MouseEvent) => void
+  prettyCode?: string
 }
 
-function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPanelProps) {
+function OutputPanel({
+  lines,
+  height,
+  outputRef,
+  onMouseDownResize,
+  prettyCode,
+}: OutputPanelProps) {
   const terminalRef = useRef<Terminal | null>(null)
   const writtenLineCountRef = useRef(0)
 
-  // 表单「美化输出」里用户写的代码（模块级 store，见 prettyOutput.ts）。
-  // 增量渲染：只对新增的一批行调用 pretty，已写入终端的历史不再重排；
-  // 编译结果存入 ref，写新行时总是用当前代码（ref 同步声明在写入 effect 之前，保证顺序）
-  const prettyCode = usePrettyCode()
-  const prettyFn = useMemo(() => compilePretty(prettyCode).fn, [prettyCode])
+  const prettyFn = useMemo(() => (prettyCode ? compilePretty(prettyCode).fn : null), [prettyCode])
   const prettyRef = useRef<PrettyFn | null>(null)
   useLayoutEffect(() => {
     prettyRef.current = prettyFn
@@ -54,6 +57,25 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
         foreground: '#e5e7eb',
         selectionBackground: 'rgba(59, 130, 246, 0.45)',
         selectionForeground: '#ffffff',
+        cursor: '#3b82f6',
+        // xterm.js 内置的经典 xterm 调色板偏暗偏灰，这里显式用 One Dark 的 16 色 ANSI 调色板（更亮，且贴合现有深色 UI）；
+        // 想换风格可整体替换为一套命名调色板（如 Solarized Dark / Dracula）
+        black: '#1b1b1b',
+        red: '#e06c75',
+        green: '#98c379',
+        yellow: '#e5c07b',
+        blue: '#61afef',
+        magenta: '#c678dd',
+        cyan: '#56b6c2',
+        white: '#dcdcdc',
+        brightBlack: '#5c6370',
+        brightRed: '#e06c75',
+        brightGreen: '#98c379',
+        brightYellow: '#e5c07b',
+        brightBlue: '#61afef',
+        brightMagenta: '#c678dd',
+        brightCyan: '#56b6c2',
+        brightWhite: '#ffffff',
       },
     })
     const fitAddon = new FitAddon()
@@ -107,7 +129,7 @@ function OutputPanel({ lines, height, outputRef, onMouseDownResize }: OutputPane
     let texts = newLines.map((line) => line.text.replace(/\r\n/g, '\n'))
     const pretty = prettyRef.current
     if (pretty) texts = prettyLines(pretty, texts)
-    terminal.write(texts.map((text) => `${text}\n`).join(''))
+    terminal.writeln(texts.join('\n'))
     writtenLineCountRef.current = lines.length
     if (nearBottomRef.current) terminal.scrollToBottom()
   }, [lines, outputRef])

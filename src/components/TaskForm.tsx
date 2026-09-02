@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import type { Task } from '../types'
 import AutoSizeTextarea from './AutoSizeTextarea'
-import { compilePretty, setPrettyCode } from '../prettyOutput'
+import { compilePretty } from '../prettyOutput'
 
 interface TaskFormProps {
   form: Task
@@ -20,12 +20,6 @@ export default function TaskForm({
   onBrowseDir,
 }: TaskFormProps) {
   const prettyCode = form.pretty_code ?? ''
-
-  // 把当前任务的美化代码同步给 OutputPanel（模块级 store，见 prettyOutput.ts），
-  // 依赖 form 值而非 onChange，因此切换任务选中时也会自动更新
-  useEffect(() => {
-    setPrettyCode(prettyCode)
-  }, [prettyCode])
 
   // 代码有效性检查：非空且编译失败时在 textarea 下方提示
   const prettyError = useMemo(() => compilePretty(prettyCode).error, [prettyCode])
@@ -115,16 +109,25 @@ export default function TaskForm({
         </div>
         <div className="flex flex-col gap-2">
           <label className="text-xs text-fg-muted">美化输出</label>
-          <AutoSizeTextarea
-            className="field-input font-mono resize-none leading-relaxed min-h-14 py-2"
-            value={prettyCode}
-            placeholder="function pretty( lines: string[], { chalk } ) : string[]"
-            onChange={(e) => onChange({ pretty_code: e.target.value })}
-            onBlur={onBlur}
-          />
+          {/* 固定函数壳：首行/末行以固定文本渲染，textarea 只写函数体（见 prettyOutput.ts 的编译逻辑） */}
+          <div className="flex flex-col overflow-hidden rounded-md border border-line bg-input-bg focus-within:border-accent">
+            <div className="select-none px-3 pt-2 font-mono text-xs leading-relaxed text-fg-muted">
+              {'function pretty( lines: string[], { chalk } ): string[] {'}
+            </div>
+            <AutoSizeTextarea
+              className="w-full min-h-14 resize-none bg-transparent px-3 py-2 font-mono text-sm leading-relaxed text-fg outline-none"
+              value={prettyCode}
+              placeholder="return lines.map((line) => chalk.green(line))"
+              onChange={(e) => onChange({ pretty_code: e.target.value })}
+              onBlur={onBlur}
+            />
+            <div className="select-none px-3 pb-2 font-mono text-xs leading-relaxed text-fg-muted">
+              {'}'}
+            </div>
+          </div>
           <span className="text-xs text-fg-muted">
-            写一段 JS：每次输出增量追加时调用 pretty(新增行, {'{ chalk }'}
-            )，返回美化后的行（可返回不同行数，可用 chalk 上色）
+            外层函数壳已固定，这里只写函数体：lines 为本次新增的输出行，chalk 用于上色，return
+            美化后的行（可返回不同行数）
           </span>
           {prettyCode.trim() && prettyError ? (
             <span className="text-xs text-danger">美化代码无效：{prettyError}</span>

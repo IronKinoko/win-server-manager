@@ -358,6 +358,7 @@ function App() {
               height={terminalHeight}
               outputRef={outputRef}
               onMouseDownResize={handleResizeStart}
+              prettyCode={form.pretty_code}
             />
           </Fragment>
         )}
