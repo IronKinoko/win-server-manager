@@ -75,6 +75,13 @@ struct AppSettings {
     keep_alive_on_close: bool,
 }
 
+// 窗口尺寸（window.json，物理像素）：启动时恢复上次的窗口大小
+#[derive(Serialize, Deserialize)]
+struct WindowSizeState {
+    width: u32,
+    height: u32,
+}
+
 // ==================== 任务管理器 ====================
 
 struct TaskState {
@@ -192,6 +199,23 @@ impl TaskManager {
     fn save_settings(&self, s: &AppSettings) {
         let path = self.data_dir.join("settings.json");
         if let Ok(json) = serde_json::to_string_pretty(s) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+
+    // ---- 窗口尺寸持久化（window.json）----
+
+    fn load_window_size(&self) -> Option<WindowSizeState> {
+        let path = self.data_dir.join("window.json");
+        let content = std::fs::read_to_string(&path).ok()?;
+        let size: WindowSizeState = serde_json::from_str(&content).ok()?;
+        (size.width > 0 && size.height > 0).then_some(size)
+    }
+
+    fn save_window_size(&self, width: u32, height: u32) {
+        let path = self.data_dir.join("window.json");
+        let size = WindowSizeState { width, height };
+        if let Ok(json) = serde_json::to_string(&size) {
             let _ = std::fs::write(path, json);
         }
     }
@@ -1417,6 +1441,13 @@ fn get_running_task_ids(state: State<'_, Arc<TaskManager>>) -> Vec<String> {
 fn perform_quit(app: &AppHandle) {
     QUITTING.store(true, Ordering::SeqCst);
     if let Some(tm) = app.try_state::<Arc<TaskManager>>() {
+        // 退出前同步记录一次窗口大小（Resized 事件的落盘有 500ms 防抖，
+        // 若用户在最后调整后立即退出，可能还没写盘）
+        if let Some(window) = app.get_webview_window("main") {
+            if let Ok(size) = window.inner_size() {
+                tm.save_window_size(size.width, size.height);
+            }
+        }
         tm.sync_running_set();
         stop_all_tasks(app, &tm);
         // 无论何种模式，退出都清空所有任务日志，重启后不残留上一轮输出
@@ -1449,6 +1480,13 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir).ok();
             let task_manager = Arc::new(TaskManager::new(data_dir));
             app.manage(task_manager.clone());
+
+            // 恢复上次记录的窗口大小（window.json）；在窗口显示前设置，避免先以默认尺寸闪现再跳变
+            if let Some(window) = app.get_webview_window("main") {
+                if let Some(size) = task_manager.load_window_size() {
+                    let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+                }
+            }
 
             // 窗口配置为创建时不可见，避免静默启动时闪现：
             // 非静默 → 立即显示；静默 → 保持隐藏，驻留托盘（左键单击随时唤回）
@@ -1501,22 +1539,37 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 关闭窗口：默认隐藏到托盘继续后台运行；
-            // 若设置中关闭了「允许后台继续运行」，则等同于退出应用
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if !QUITTING.load(Ordering::SeqCst) {
-                    let keep_alive = window
-                        .app_handle()
-                        .try_state::<Arc<TaskManager>>()
-                        .map(|tm| tm.load_settings().keep_alive_on_close)
-                        .unwrap_or(true);
-                    if keep_alive {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    } else {
-                        perform_quit(&window.app_handle());
+            match event {
+                // 关闭窗口：默认隐藏到托盘继续后台运行；
+                // 若设置中关闭了「允许后台继续运行」，则等同于退出应用
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if !QUITTING.load(Ordering::SeqCst) {
+                        let keep_alive = window
+                            .app_handle()
+                            .try_state::<Arc<TaskManager>>()
+                            .map(|tm| tm.load_settings().keep_alive_on_close)
+                            .unwrap_or(true);
+                        if keep_alive {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        } else {
+                            perform_quit(&window.app_handle());
+                        }
                     }
                 }
+                // 窗口大小变化后记录窗口大小；防抖 500ms，避免拖动边缘时高频写盘
+                tauri::WindowEvent::Resized(size) => {
+                    let Some(tm) = window.app_handle().try_state::<Arc<TaskManager>>() else {
+                        return;
+                    };
+                    let tm = tm.inner().clone();
+                    let (width, height) = (size.width, size.height);
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        tm.save_window_size(width, height);
+                    });
+                }
+                _ => {}
             }
         })
         .on_tray_icon_event(|app, event| {
