@@ -1,28 +1,57 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Task } from '../types'
 import AutoSizeTextarea from './AutoSizeTextarea'
 import { compilePretty } from '../prettyOutput'
 
+function buildPowerShell(form: Task): string {
+  const exe = form.exe_path.trim().replace(/\s+/g, ' ')
+  const argLines = form.arguments
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/\s+/g, ' '))
+    .filter(Boolean)
+  if (!exe && argLines.length === 0) return ''
+  const head = exe || argLines[0]
+  const headIsSpacedPath = head.includes(' ') && /[:\\]/.test(head.split(' ')[0])
+  const headStr = headIsSpacedPath ? `"${head}"` : head
+  const rest = exe ? argLines : argLines.slice(1)
+  const firstLine = [headStr, rest[0]].filter(Boolean).join(' ')
+  const commandLine = [firstLine, ...rest.slice(1)].join(' ')
+  const dir = form.working_dir.trim()
+  const parts: string[] = []
+  if (dir) parts.push(`cd "${dir}" && `)
+  parts.push(`${commandLine}`)
+  return parts.join('')
+}
 interface TaskFormProps {
   form: Task
   onChange: (patch: Partial<Task>) => void
   // 任意控件失焦时触发，由 App 决定是否保存
   onBlur: () => void
-  onBrowseExe: () => void
   onBrowseDir: () => void
 }
 
-export default function TaskForm({
-  form,
-  onChange,
-  onBlur,
-  onBrowseExe,
-  onBrowseDir,
-}: TaskFormProps) {
+export default function TaskForm({ form, onChange, onBlur, onBrowseDir }: TaskFormProps) {
   const prettyCode = form.pretty_code ?? ''
 
   // 代码有效性检查：非空且编译失败时在 textarea 下方提示
   const prettyError = useMemo(() => compilePretty(prettyCode).error, [prettyCode])
+
+  // 美化输出：默认收起，只展开时才显示代码编辑区
+  const [prettyExpanded, setPrettyExpanded] = useState(false)
+
+  // 复制命令：成功后短暂显示「已复制」反馈
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
+  const handleCopy = () => {
+    const text = buildPowerShell(form)
+    if (!text) return
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      window.clearTimeout(copyTimer.current)
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500)
+    })
+  }
   return (
     <div className="flex flex-col flex-1 min-h-0 border-b border-line">
       {/* Header：可随时编辑的任务名称（失焦即自动保存，不再有手动保存按钮） */}
@@ -63,8 +92,13 @@ export default function TaskForm({
               onChange={(e) => onChange({ exe_path: e.target.value })}
               onBlur={onBlur}
             />
-            <button className="btn-base shrink-0" onClick={onBrowseExe}>
-              浏览…
+            <button
+              type="button"
+              className="btn-base shrink-0"
+              disabled={!buildPowerShell(form)}
+              onClick={handleCopy}
+            >
+              {copied ? '已复制' : '复制命令'}
             </button>
           </div>
           <span className="text-xs text-fg-muted">
@@ -83,48 +117,61 @@ export default function TaskForm({
             onBlur={onBlur}
           />
         </div>
-        <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
-          <span className="text-sm text-fg">崩溃自动重启</span>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={form.auto_restart}
-              onChange={(e) => onChange({ auto_restart: e.target.checked })}
-              onBlur={onBlur}
-            />
-            <span className="switch-slider" />
-          </label>
-        </div>
-        <div className="flex items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
-          <span className="text-sm text-fg">应用启动时自动运行</span>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={form.auto_run_on_launch}
-              onChange={(e) => onChange({ auto_run_on_launch: e.target.checked })}
-              onBlur={onBlur}
-            />
-            <span className="switch-slider" />
-          </label>
+        <div className="flex gap-3">
+          <div className="flex flex-1 items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
+            <span className="text-sm text-fg">崩溃自动重启</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={form.auto_restart}
+                onChange={(e) => onChange({ auto_restart: e.target.checked })}
+                onBlur={onBlur}
+              />
+              <span className="switch-slider" />
+            </label>
+          </div>
+          <div className="flex flex-1 items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
+            <span className="text-sm text-fg">应用启动时自动运行</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={form.auto_run_on_launch}
+                onChange={(e) => onChange({ auto_run_on_launch: e.target.checked })}
+                onBlur={onBlur}
+              />
+              <span className="switch-slider" />
+            </label>
+          </div>
         </div>
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-fg-muted">美化输出</label>
-          {/* 固定函数壳：首行/末行以固定文本渲染，textarea 只写函数体（见 prettyOutput.ts 的编译逻辑） */}
-          <div className="flex flex-col overflow-hidden rounded-md border border-line bg-input-bg focus-within:border-accent">
-            <div className="select-none px-3 pt-2 font-mono text-xs leading-relaxed text-fg-muted">
-              {'function pretty( lines: string[], { chalk } ): string[] {'}
-            </div>
-            <AutoSizeTextarea
-              className="w-full min-h-14 resize-none bg-transparent px-3 py-2 font-mono text-sm leading-relaxed text-fg outline-none"
-              value={prettyCode}
-              placeholder="return lines.map((line) => chalk.green(line))"
-              onChange={(e) => onChange({ pretty_code: e.target.value })}
-              onBlur={onBlur}
-            />
-            <div className="select-none px-3 pb-2 font-mono text-xs leading-relaxed text-fg-muted">
-              {'}'}
-            </div>
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-fg-muted">美化输出</label>
+            <button
+              type="button"
+              className="text-xs text-fg-muted cursor-pointer transition-colors hover:text-fg"
+              onClick={() => setPrettyExpanded((v) => !v)}
+            >
+              {prettyExpanded ? '收起' : '展开'}
+            </button>
           </div>
+          {/* 固定函数壳：首行/末行以固定文本渲染，textarea 只写函数体（见 prettyOutput.ts 的编译逻辑） */}
+          {prettyExpanded ? (
+            <div className="flex flex-col overflow-hidden rounded-md border border-line bg-input-bg focus-within:border-accent">
+              <div className="select-none px-3 pt-2 font-mono text-xs leading-relaxed text-fg-muted">
+                {'function pretty( lines: string[], { chalk } ): string[] {'}
+              </div>
+              <AutoSizeTextarea
+                className="w-full min-h-14 resize-none bg-transparent px-3 py-2 font-mono text-sm leading-relaxed text-fg outline-none"
+                value={prettyCode}
+                placeholder="return lines.map((line) => chalk.green(line))"
+                onChange={(e) => onChange({ pretty_code: e.target.value })}
+                onBlur={onBlur}
+              />
+              <div className="select-none px-3 pb-2 font-mono text-xs leading-relaxed text-fg-muted">
+                {'}'}
+              </div>
+            </div>
+          ) : null}
           <span className="text-xs text-fg-muted">
             外层函数壳已固定，这里只写函数体：lines 为本次新增的输出行，chalk 用于上色，return
             美化后的行（可返回不同行数）

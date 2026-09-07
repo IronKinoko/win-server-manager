@@ -300,15 +300,6 @@ function App() {
     localStorage.setItem('terminal-height', String(next))
   }
 
-  const handleBrowseExe = async () => {
-    const path = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: '可执行文件', extensions: ['exe', 'bat', 'cmd'] }],
-    })
-    if (typeof path === 'string') updateForm({ exe_path: path })
-  }
-
   const handleBrowseDir = async () => {
     const path = await open({ multiple: false, directory: true })
     if (typeof path === 'string') updateForm({ working_dir: path })
@@ -341,7 +332,6 @@ function App() {
               form={form}
               onChange={updateForm}
               onBlur={handleBlurSave}
-              onBrowseExe={handleBrowseExe}
               onBrowseDir={handleBrowseDir}
             />
             <ControlBar
