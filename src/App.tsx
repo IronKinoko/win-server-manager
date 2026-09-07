@@ -242,6 +242,7 @@ function App() {
       ...src.task,
       id: '',
       name: src.task.name + ' Copy',
+      auto_run_on_launch: false,
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()
