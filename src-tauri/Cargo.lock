@@ -969,6 +969,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast-strip-ansi"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3086ffd0a7160f58f988c74173a002e255da505a114e2f5425acb1eaab2b8ac"
+dependencies = [
+ "vt-push-parser",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4245,6 +4254,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vt-push-parser"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdbf39d53c5a50cad8119d9cde929ecd208764e8d8d1626486b8929cbcd5f0e7"
+dependencies = [
+ "hex",
+ "smallvec",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4453,6 +4472,7 @@ name = "win-server-manager"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "fast-strip-ansi",
  "serde",
  "serde_json",
  "tauri",

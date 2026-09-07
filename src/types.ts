@@ -9,6 +9,8 @@ export interface Task {
   auto_run_on_launch: boolean
   // 美化输出的函数体（JS 片段）；页面把外层壳 function pretty(lines, { chalk }) { … } 渲染为固定文本，随任务持久化
   pretty_code?: string
+  // 自定义日志文件路径：保存时若不存在立即创建；每次启动删除重建为空文件，本次输出实时追加
+  log_file_path?: string
 }
 
 export type TaskStatus = 'stopped' | 'running' | 'crashed'

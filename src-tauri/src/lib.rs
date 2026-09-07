@@ -30,6 +30,9 @@ pub struct Task {
     // 为空时不落盘，保持 tasks.json 整洁
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pretty_code: Option<String>,
+    // 自定义日志文件路径：保存时若不存在立即创建；每次启动删除重建为空文件，本次输出实时追加
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_file_path: Option<String>,
 }
 
 #[derive(Serialize, Clone, PartialEq)]
@@ -845,6 +848,7 @@ fn spawn_output_reader(
     app: &AppHandle,
     id: &str,
     log_path: &Path,
+    extra_log_path: Option<&Path>,
     source: &str,
     reader: impl tokio::io::AsyncRead + std::marker::Unpin + Send + 'static,
 ) {
@@ -852,6 +856,7 @@ fn spawn_output_reader(
     let id = id.to_string();
     let source = source.to_string();
     let log_path = log_path.to_path_buf();
+    let extra_log_path = extra_log_path.map(Path::to_path_buf);
     tokio::spawn(async move {
         let mut reader = tokio::io::BufReader::new(reader);
         let mut buf = [0u8; 8192];
@@ -861,6 +866,28 @@ fn spawn_output_reader(
             .append(true)
             .open(&log_path)
             .ok();
+        // 自定义日志文件：与内部日志同步实时追加（打开失败则静默跳过）
+        let mut extra_log_file = extra_log_path.as_ref().and_then(|p| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+        });
+        use std::io::Write;
+        // 内部日志保留原始文本（终端回显依赖 ANSI）；
+        // 自定义日志文件是纯文本，写入前去掉 ANSI 转义序列
+        let mut write_logs = |text: &str| {
+            if let Some(ref mut f) = log_file {
+                let _ = f.write_all(text.as_bytes());
+            }
+            if let Some(ref mut f) = extra_log_file {
+                let stripped = fast_strip_ansi::strip_ansi_string(text);
+                if !stripped.is_empty() {
+                    let _ = f.write_all(stripped.as_bytes());
+                }
+            }
+        };
 
         loop {
             match reader.read(&mut buf).await {
@@ -876,10 +903,7 @@ fn spawn_output_reader(
                                     text: text.clone(),
                                 },
                             );
-                            if let Some(ref mut f) = log_file {
-                                use std::io::Write;
-                                let _ = f.write_all(text.as_bytes());
-                            }
+                            write_logs(&text);
                         }
                     }
                     break;
@@ -898,10 +922,7 @@ fn spawn_output_reader(
                                     text: text.clone(),
                                 },
                             );
-                            if let Some(ref mut f) = log_file {
-                                use std::io::Write;
-                                let _ = f.write_all(text.as_bytes());
-                            }
+                            write_logs(&text);
                         }
                         line_buf = remaining.to_vec();
                     }
@@ -916,10 +937,7 @@ fn spawn_output_reader(
                                     text: text.clone(),
                                 },
                             );
-                            if let Some(ref mut f) = log_file {
-                                use std::io::Write;
-                                let _ = f.write_all(text.as_bytes());
-                            }
+                            write_logs(&text);
                         }
                         line_buf.clear();
                     }
@@ -939,20 +957,6 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     };
     let (exe_path, extra_args) = resolve_command(&task.exe_path, explicit_workdir)?;
 
-    // 每次启动清空该任务的日志与前端输出，保证输出区只反映本次运行
-    {
-        let log_dir = tm.data_dir.join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_path = log_dir.join(format!("{}.log", task.id));
-        std::fs::File::create(&log_path).ok();
-    }
-    let _ = app.emit(
-        "task-output-clear",
-        serde_json::json!({ "task_id": task.id }),
-    );
-
-    let mut cmd = tokio::process::Command::new(&exe_path);
-
     // 未配置工作目录时沿用原行为：使用 exe 所在目录
     let working_dir = match explicit_workdir {
         Some(dir) => dir.to_path_buf(),
@@ -962,6 +966,28 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf(),
     };
+
+    // 每次启动清空该任务的日志与前端输出，保证输出区只反映本次运行；
+    // 配置了自定义日志文件时，删除旧文件并重建为空文件，本次输出实时追加进去
+    // （相对路径按任务工作目录解析）
+    let extra_log_path = resolve_log_file_path(task, Some(&working_dir));
+    if let Some(ref path) = extra_log_path {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let _ = std::fs::remove_file(path);
+        std::fs::File::create(path).ok();
+    }
+    let log_dir = tm.data_dir.join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
+    let log_path = log_dir.join(format!("{}.log", task.id));
+    std::fs::File::create(&log_path).ok();
+    let _ = app.emit(
+        "task-output-clear",
+        serde_json::json!({ "task_id": task.id }),
+    );
+
+    let mut cmd = tokio::process::Command::new(&exe_path);
     cmd.current_dir(&working_dir);
 
     // 参数 = 专用参数框的内容（同样做引号感知的拆分）+「可执行文件」里附带的命令行参数
@@ -1028,10 +1054,6 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
         },
     );
 
-    let log_dir = tm.data_dir.join("logs");
-    std::fs::create_dir_all(&log_dir).ok();
-    let log_path = log_dir.join(format!("{}.log", task.id));
-
     // ---- 读取子进程输出 ----
     // Windows 10+ 使用 ConPTY：stdout+stderr 合并为单条 pty 流（source 统一记为 stdout）；
     // 其余情况分别读取两条管道
@@ -1043,6 +1065,7 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
                 app,
                 &task.id,
                 &log_path,
+                extra_log_path.as_deref(),
                 "stdout",
                 PtyReader {
                     inner: tokio::fs::File::from_std(file),
@@ -1052,8 +1075,22 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
         } else {
             let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
             let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
-            spawn_output_reader(app, &task.id, &log_path, "stdout", stdout);
-            spawn_output_reader(app, &task.id, &log_path, "stderr", stderr);
+            spawn_output_reader(
+                app,
+                &task.id,
+                &log_path,
+                extra_log_path.as_deref(),
+                "stdout",
+                stdout,
+            );
+            spawn_output_reader(
+                app,
+                &task.id,
+                &log_path,
+                extra_log_path.as_deref(),
+                "stderr",
+                stderr,
+            );
         }
     }
 
@@ -1061,8 +1098,22 @@ fn do_start_task(app: &AppHandle, tm: &Arc<TaskManager>, task: &Task) -> Result<
     {
         let stdout = child.stdout.take().ok_or("无法获取 stdout")?;
         let stderr = child.stderr.take().ok_or("无法获取 stderr")?;
-        spawn_output_reader(app, &task.id, &log_path, "stdout", stdout);
-        spawn_output_reader(app, &task.id, &log_path, "stderr", stderr);
+        spawn_output_reader(
+            app,
+            &task.id,
+            &log_path,
+            extra_log_path.as_deref(),
+            "stdout",
+            stdout,
+        );
+        spawn_output_reader(
+            app,
+            &task.id,
+            &log_path,
+            extra_log_path.as_deref(),
+            "stderr",
+            stderr,
+        );
     }
 
     // ---- 进程监控（等待退出 + 自动重启）----
@@ -1138,6 +1189,56 @@ fn get_tasks(state: State<'_, Arc<TaskManager>>) -> Vec<TaskInfo> {
     state.get_all()
 }
 
+/// 任务的有效工作目录：显式 working_dir 优先，否则按 exe 所在目录（与子进程同规则）；无法确定时返回 None
+fn effective_workdir(task: &Task) -> Option<PathBuf> {
+    let explicit = task.working_dir.trim();
+    if !explicit.is_empty() {
+        return Some(PathBuf::from(explicit));
+    }
+    let (exe_path, _) = resolve_command(&task.exe_path, None).ok()?;
+    exe_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(PathBuf::from)
+}
+
+/// 解析任务的自定义日志文件路径：绝对路径原样使用，相对路径按有效工作目录解析
+fn resolve_log_file_path(task: &Task, workdir: Option<&Path>) -> Option<PathBuf> {
+    let path = task
+        .log_file_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let p = Path::new(path);
+    if p.is_absolute() {
+        Some(p.to_path_buf())
+    } else {
+        workdir.map(|d| d.join(p))
+    }
+}
+
+/// 规范化自定义日志文件路径并立即落盘：空白视为未设置；
+/// 相对路径按有效工作目录解析；文件不存在时立即创建（含父目录），已存在则保留不动
+fn apply_log_file_path(task: &mut Task) {
+    let path = task
+        .log_file_path
+        .take()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if path.is_empty() {
+        return;
+    }
+    task.log_file_path = Some(path);
+    if let Some(resolved) = resolve_log_file_path(task, effective_workdir(task).as_deref()) {
+        if let Some(parent) = resolved.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if !resolved.exists() {
+            let _ = std::fs::File::create(&resolved);
+        }
+    }
+}
+
 #[tauri::command]
 fn add_task(state: State<'_, Arc<TaskManager>>, mut task: Task) -> Result<TaskInfo, String> {
     if task.id.is_empty() {
@@ -1153,6 +1254,7 @@ fn add_task(state: State<'_, Arc<TaskManager>>, mut task: Task) -> Result<TaskIn
     if tasks.contains_key(&task.id) {
         return Err("任务 ID 已存在".into());
     }
+    apply_log_file_path(&mut task);
     tasks.insert(task.id.clone(), task.clone());
     drop(tasks);
     state.save_tasks();
@@ -1176,7 +1278,8 @@ fn add_task(state: State<'_, Arc<TaskManager>>, mut task: Task) -> Result<TaskIn
 }
 
 #[tauri::command]
-fn update_task(state: State<'_, Arc<TaskManager>>, task: Task) -> Result<TaskInfo, String> {
+fn update_task(state: State<'_, Arc<TaskManager>>, mut task: Task) -> Result<TaskInfo, String> {
+    apply_log_file_path(&mut task);
     let mut tasks = state.tasks.lock().unwrap();
     if !tasks.contains_key(&task.id) {
         return Err("任务不存在".into());
@@ -1663,4 +1766,68 @@ fn conpty_child_sees_tty_and_preserves_ansi() {
         text
     );
     assert!(text.contains("RED"), "PTY 输出缺少期望文本: {:?}", text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_task(log_file_path: Option<String>) -> Task {
+        Task {
+            id: "t1".into(),
+            name: "t".into(),
+            exe_path: String::new(),
+            arguments: String::new(),
+            working_dir: String::new(),
+            auto_restart: false,
+            auto_run_on_launch: false,
+            pretty_code: None,
+            log_file_path,
+        }
+    }
+
+    #[test]
+    fn strip_ansi_for_custom_log_file() {
+        use fast_strip_ansi::strip_ansi_string;
+        // SGR 颜色序列、清屏/光标移动序列都要剥掉，普通文本原样保留
+        assert_eq!(strip_ansi_string("\u{1b}[31mRED\u{1b}[0m"), "RED");
+        assert_eq!(strip_ansi_string("\u{1b}[2J\u{1b}[H"), "");
+        assert_eq!(strip_ansi_string("plain line"), "plain line");
+    }
+
+    #[test]
+    fn apply_log_file_path_creates_missing_file_and_normalizes() {
+        let dir = std::env::temp_dir().join(format!("wsm-log-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sub").join("run.log");
+
+        // 文件不存在：立即创建（含父目录），路径去空白后落盘
+        let mut task = make_task(Some(format!("  {}", path.display())));
+        apply_log_file_path(&mut task);
+        assert!(path.exists());
+        assert_eq!(
+            task.log_file_path.as_deref().unwrap(),
+            path.display().to_string()
+        );
+
+        // 文件已存在：保留不动
+        let mut task2 = make_task(Some(path.display().to_string()));
+        apply_log_file_path(&mut task2);
+        assert!(path.exists());
+
+        // 相对路径按任务工作目录解析，原值原样存储
+        let mut task4 = make_task(Some("sub/rel.log".into()));
+        task4.working_dir = dir.display().to_string();
+        apply_log_file_path(&mut task4);
+        assert!(dir.join("sub/rel.log").exists());
+        assert_eq!(task4.log_file_path.as_deref().unwrap(), "sub/rel.log");
+
+        // 空白路径视为未设置
+        let mut task3 = make_task(Some("   ".into()));
+        apply_log_file_path(&mut task3);
+        assert!(task3.log_file_path.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

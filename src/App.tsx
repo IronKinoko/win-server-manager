@@ -211,6 +211,7 @@ function App() {
       working_dir: '',
       auto_restart: false,
       auto_run_on_launch: false,
+      log_file_path: '',
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()
@@ -243,6 +244,8 @@ function App() {
       id: '',
       name: src.task.name + ' Copy',
       auto_run_on_launch: false,
+      // 复制任务不继承自定义日志文件，避免两个任务写同一个文件
+      log_file_path: '',
     }
     const created = await invoke<TaskInfo>('add_task', { task })
     await refreshTasks()

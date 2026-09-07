@@ -18,9 +18,10 @@ function buildPowerShell(form: Task): string {
   const commandLine = [firstLine, ...rest.slice(1)].join(' ')
   const dir = form.working_dir.trim()
   const parts: string[] = []
-  if (dir) parts.push(`cd "${dir}" && `)
+  if (dir) parts.push(`cd "${dir}" && .\\`)
   parts.push(`${commandLine}`)
-  return parts.join('')
+  // 使用 PowerShell 单引号风格：\" 变为 "，其余双引号变为单引号
+  return parts.join('').replace(/\\?"/g, (m) => (m === '\\"' ? '"' : "'"))
 }
 interface TaskFormProps {
   form: Task
@@ -116,6 +117,19 @@ export default function TaskForm({ form, onChange, onBlur, onBrowseDir }: TaskFo
             onChange={(e) => onChange({ arguments: e.target.value })}
             onBlur={onBlur}
           />
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-xs text-fg-muted">日志文件</label>
+          <input
+            className="field-input"
+            value={form.log_file_path ?? ''}
+            placeholder="D:\server\logs\app.log"
+            onChange={(e) => onChange({ log_file_path: e.target.value })}
+            onBlur={onBlur}
+          />
+          <span className="text-xs text-fg-muted">
+            留空则只写入应用内部日志，相对路径按工作目录解析；保存时立即创建，每次启动清空重建并实时追加本次输出
+          </span>
         </div>
         <div className="flex gap-3">
           <div className="flex flex-1 items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
