@@ -13,6 +13,20 @@ use tokio::io::AsyncReadExt;
 // 标记应用是否正在真正退出（区别于"隐藏到托盘"）
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+// 「应用启动时自动运行」的倒计时秒数：应用启动后先倒数这段时间，期间在界面按钮上展示剩余秒数，
+// 归零后才真正拉起任务；用户可在倒计时期间取消本次自动运行
+const AUTO_RUN_COUNTDOWN_SECS: u32 = 10;
+
+// 正式包的 identifier。它同时是「开发包 / 正式包共用的数据目录名」：开发包虽然 identifier 不同
+//（见 DEV_IDENTIFIER_SUFFIX），但必须与正式包读写同一份 tasks.json / settings.json / window.json / logs。
+// 注意：这个值等同于用户数据的落盘位置，改名等于迁移用户数据，不要随意修改
+const RELEASE_IDENTIFIER: &str = "com.winservermanager.app";
+// 开发包在正式 identifier 后追加的后缀。单实例插件按 identifier 建立互斥键（命名互斥体 + 隐藏窗口），
+// 两者必须不同，否则 `pnpm tauri dev` 一启动就会把正在运行的正式包顶掉（反之亦然）
+const DEV_IDENTIFIER_SUFFIX: &str = ".dev";
+// 实例锁文件名（位于共享数据目录下）：用于跨「开发包 / 正式包」判断是否已有实例在运行
+const INSTANCE_LOCK_FILE: &str = "instance.lock";
+
 // ==================== 数据模型 ====================
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -63,6 +77,14 @@ pub struct StatusEvent {
     pub status: TaskStatus,
 }
 
+// 自动运行倒计时事件：每秒广播一次，task_ids 为仍在倒计时的任务，remaining 为剩余秒数；
+// remaining 为 0 表示倒计时结束（task_ids 为空），界面据此收起倒计时
+#[derive(Serialize, Clone)]
+pub struct AutoRunCountdownEvent {
+    pub remaining: u32,
+    pub task_ids: Vec<String>,
+}
+
 // 应用级设置（settings.json）
 fn default_keep_alive() -> bool {
     // 旧版 settings.json 缺少该字段时保持既有行为：关闭主窗口 = 隐藏到托盘
@@ -104,6 +126,10 @@ pub struct TaskManager {
     states: Mutex<HashMap<String, TaskState>>,
     // 正在启动中的任务集合：原子抢占，防止并发调用导致同一任务被启动两次
     starting: Mutex<HashSet<String>>,
+    // 被用户取消本次自动运行的任务集合（仅本次进程内有效，重启应用后清空）
+    auto_run_cancelled: Mutex<HashSet<String>>,
+    // 自动运行倒计时的截止时刻（None 表示当前没有在进行倒计时）
+    auto_run_deadline: Mutex<Option<std::time::Instant>>,
     data_dir: PathBuf,
 }
 
@@ -113,6 +139,8 @@ impl TaskManager {
             tasks: Mutex::new(HashMap::new()),
             states: Mutex::new(HashMap::new()),
             starting: Mutex::new(HashSet::new()),
+            auto_run_cancelled: Mutex::new(HashSet::new()),
+            auto_run_deadline: Mutex::new(None),
             data_dir,
         };
         tm.load_tasks();
@@ -138,15 +166,66 @@ impl TaskManager {
         self.starting.lock().unwrap().remove(id);
     }
 
-    /// 取出所有开启「应用启动时自动运行」的任务 ID
-    fn auto_run_on_launch_ids(&self) -> Vec<String> {
+    /// 取出仍在等待自动运行的任务 ID：开启了「应用启动时自动运行」、当前未运行且未被用户取消。
+    /// 倒计时期间每轮重新调用，任务被删除 / 关闭开关 / 手动启动 / 取消后会自动退出倒计时
+    fn pending_auto_run_ids(&self) -> Vec<String> {
+        let cancelled = self.auto_run_cancelled.lock().unwrap();
+        let running: HashSet<String> = self
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, s)| s.status == TaskStatus::Running)
+            .map(|(id, _)| id.clone())
+            .collect();
         self.tasks
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, t)| t.auto_run_on_launch)
+            .filter(|(id, t)| {
+                t.auto_run_on_launch && !running.contains(*id) && !cancelled.contains(*id)
+            })
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// 取消某任务本次自动运行（倒计时期间由界面按钮触发）
+    fn cancel_auto_run(&self, id: &str) {
+        self.auto_run_cancelled
+            .lock()
+            .unwrap()
+            .insert(id.to_string());
+    }
+
+    /// 批量取消本次自动运行：把当前仍在倒计时的任务全部标记为取消，
+    /// 并清掉倒计时截止时刻，使「剩下的」倒计时立即结束（后续不再拉起任何任务）
+    fn cancel_all_auto_run(&self) {
+        let ids = self.pending_auto_run_ids();
+        {
+            let mut cancelled = self.auto_run_cancelled.lock().unwrap();
+            for id in ids {
+                cancelled.insert(id);
+            }
+        }
+        *self.auto_run_deadline.lock().unwrap() = None;
+    }
+
+    /// 记录自动运行倒计时的截止时刻（应用启动时设置一次）
+    fn set_auto_run_deadline(&self, deadline: std::time::Instant) {
+        *self.auto_run_deadline.lock().unwrap() = Some(deadline);
+    }
+
+    /// 自动运行倒计时剩余秒数（向上取整）：未在倒计时或已结束返回 0。
+    /// 界面挂载后据此补齐首个事件之前的状态，保证按钮上的秒数与后端一致
+    fn auto_run_remaining_secs(&self) -> u32 {
+        let guard = self.auto_run_deadline.lock().unwrap();
+        let Some(deadline) = *guard else {
+            return 0;
+        };
+        let ms = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_millis();
+        ((ms + 999) / 1000).min(u32::MAX as u128) as u32
     }
 
     /// 清空全部任务日志文件（退出时随停止任务一并调用）
@@ -1393,6 +1472,41 @@ fn stop_task(app: AppHandle, state: State<'_, Arc<TaskManager>>, id: String) -> 
     Ok(())
 }
 
+/// 取消某任务本次「应用启动时自动运行」（仅在启动倒计时期间有效，关闭应用后重置）
+#[tauri::command]
+fn cancel_auto_run(state: State<'_, Arc<TaskManager>>, id: String) {
+    state.inner().cancel_auto_run(&id);
+}
+
+/// 批量取消本次「应用启动时自动运行」：倒计时期间所有待启动任务都不再拉起
+#[tauri::command]
+fn cancel_all_auto_run(state: State<'_, Arc<TaskManager>>) {
+    state.inner().cancel_all_auto_run();
+}
+
+/// 停止所有运行中的任务（侧边栏「全部停止」按钮；与退出时的收尾共用同一实现）
+#[tauri::command]
+fn stop_all(app: AppHandle, state: State<'_, Arc<TaskManager>>) {
+    stop_all_tasks(&app, state.inner());
+}
+
+/// 查询当前自动运行倒计时状态：界面挂载时补齐一次（首个事件可能早于界面挂载而错过）
+#[tauri::command]
+fn get_auto_run_countdown(state: State<'_, Arc<TaskManager>>) -> AutoRunCountdownEvent {
+    let tm = state.inner();
+    let remaining = tm.auto_run_remaining_secs();
+    if remaining == 0 {
+        return AutoRunCountdownEvent {
+            remaining: 0,
+            task_ids: Vec::new(),
+        };
+    }
+    AutoRunCountdownEvent {
+        remaining,
+        task_ids: tm.pending_auto_run_ids(),
+    }
+}
+
 // 停止所有运行中的任务（应用退出时调用）
 fn stop_all_tasks(app: &AppHandle, tm: &Arc<TaskManager>) {
     let ids: Vec<String> = {
@@ -1536,6 +1650,76 @@ fn get_running_task_ids(state: State<'_, Arc<TaskManager>>) -> Vec<String> {
     state.load_running_ids()
 }
 
+// ==================== 数据目录与实例锁 ====================
+
+/// 共享数据目录：始终使用正式包 identifier 对应的目录。
+/// `app_data_dir()` 会把当前进程的 identifier 拼在系统数据目录之后，开发包的 identifier 带 .dev 后缀，
+/// 因此这里替换回正式包目录名，保证开发包与正式包读写同一份配置与任务数据
+fn shared_data_dir(app: &AppHandle) -> PathBuf {
+    shared_data_dir_from(app.path().app_data_dir().expect("无法获取应用数据目录"))
+}
+
+/// 把 `<系统数据目录>/<当前 identifier>` 映射为 `<系统数据目录>/<正式包 identifier>`；
+/// 已经是正式包目录时原样返回
+fn shared_data_dir_from(dir: PathBuf) -> PathBuf {
+    if dir.file_name().and_then(|n| n.to_str()) == Some(RELEASE_IDENTIFIER) {
+        return dir;
+    }
+    match dir.parent() {
+        Some(parent) => parent.join(RELEASE_IDENTIFIER),
+        None => dir,
+    }
+}
+
+/// 独占打开锁文件：Windows 用 share_mode(0)（不允许其它句柄同时打开该文件），
+/// Unix 用 flock(LOCK_EX | LOCK_NB)。两种方式都由操作系统在进程退出（含崩溃）时自动释放，
+/// 不会留下需要手工清理的陈旧锁文件
+#[cfg(windows)]
+fn open_instance_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .share_mode(0)
+        .open(path)
+}
+
+#[cfg(unix)]
+fn open_instance_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+/// 尝试取得实例锁：Some = 当前是唯一在运行的实例；None = 已有另一个实例在运行
+///（无论它是开发包还是正式包）。判断依据只是"锁文件已被独占持有"，与文件内容无关
+fn acquire_instance_lock(data_dir: &Path) -> Option<std::fs::File> {
+    use std::io::Write as _;
+    match open_instance_lock(&data_dir.join(INSTANCE_LOCK_FILE)) {
+        Ok(mut file) => {
+            // 写入持有者 pid，便于出现异常时排查是谁占着锁
+            let _ = file.set_len(0);
+            let _ = file.write_all(std::process::id().to_string().as_bytes());
+            Some(file)
+        }
+        Err(_) => None,
+    }
+}
+
+/// 实例锁句柄：持有期间表示本进程是当前唯一在运行的实例，drop（进程退出）即释放
+struct InstanceLock {
+    #[allow(dead_code)]
+    file: std::fs::File,
+}
+
 // ==================== 应用入口 ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1566,6 +1750,15 @@ fn quit_app(app: AppHandle) {
 }
 
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    // 开发包使用带后缀的 identifier：单实例插件按 identifier 建互斥键，
+    // 若不区分，`pnpm tauri dev` 与已安装的正式包会互相顶掉（后启动的那个直接退出）。
+    // 正式构建（custom-protocol）保持 tauri.conf.json 里的 identifier 不变
+    if tauri::is_dev() {
+        let mut identifier = context.config().identifier.clone();
+        identifier.push_str(DEV_IDENTIFIER_SUFFIX);
+        context.config_mut().identifier = identifier;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1579,10 +1772,22 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            let data_dir = app.path().app_data_dir().expect("无法获取应用数据目录");
+            // 共享数据目录：开发包与正式包 identifier 不同，但读写同一份配置与任务数据
+            let data_dir = shared_data_dir(app.handle());
             std::fs::create_dir_all(&data_dir).ok();
             let task_manager = Arc::new(TaskManager::new(data_dir));
             app.manage(task_manager.clone());
+
+            // 实例锁：开发包与正式包的 identifier 不同，单实例插件不会互相拦截（开发时两者可同时开着），
+            // 但它们共用同一份任务配置，若都自动唤醒会重复拉起同一批服务。
+            // 这里用共享数据目录下的锁文件做跨包判断：拿不到锁说明已有实例在跑
+            let first_instance = match acquire_instance_lock(&task_manager.data_dir) {
+                Some(file) => {
+                    app.manage(InstanceLock { file });
+                    true
+                }
+                None => false,
+            };
 
             // 恢复上次记录的窗口大小（window.json）；在窗口显示前设置，避免先以默认尺寸闪现再跳变
             if let Some(window) = app.get_webview_window("main") {
@@ -1599,15 +1804,52 @@ pub fn run() {
                 }
             }
 
-            // 自动运行：逐个拉起开启「应用启动时自动运行」的任务。
+            // 自动运行：先做 AUTO_RUN_COUNTDOWN_SECS 秒倒计时，每秒把剩余秒数广播给界面
+            //（按钮上展示），归零后再逐个拉起，期间用户可取消本次自动启动。
             // setup 阶段不在 tokio 运行时上下文中，故显式调度到 Tauri 全局运行时；
-            // 与手动启动共用原子启动槽位，已在运行的任务会被跳过
-            let auto_ids = task_manager.auto_run_on_launch_ids();
-            if !auto_ids.is_empty() {
+            // 与手动启动共用原子启动槽位，已在运行的任务会被跳过。
+            // 仅在当前是唯一实例时执行：已有实例在跑说明同一批任务可能已被它拉起
+            if !first_instance {
+                // 已有实例在运行：跳过自动运行。仅在开发模式下往终端提示（正式包无控制台，输出无处可见）
+                if tauri::is_dev() {
+                    eprintln!("[实例锁] 已有实例在运行，跳过自动运行任务");
+                }
+            } else if !task_manager.pending_auto_run_ids().is_empty() {
+                task_manager.set_auto_run_deadline(
+                    std::time::Instant::now()
+                        + std::time::Duration::from_secs(AUTO_RUN_COUNTDOWN_SECS as u64),
+                );
                 let handle = app.handle().clone();
                 let tm = task_manager.clone();
                 tauri::async_runtime::spawn(async move {
-                    for id in auto_ids {
+                    let mut ticked = false;
+                    for remaining in (1..=AUTO_RUN_COUNTDOWN_SECS).rev() {
+                        let ids = tm.pending_auto_run_ids();
+                        if ids.is_empty() {
+                            break;
+                        }
+                        ticked = true;
+                        let _ = handle.emit(
+                            "auto-run-countdown",
+                            AutoRunCountdownEvent {
+                                remaining,
+                                task_ids: ids,
+                            },
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    // 倒计时结束：广播一次 remaining 0，让界面收起所有倒计时显示
+                    if ticked {
+                        let _ = handle.emit(
+                            "auto-run-countdown",
+                            AutoRunCountdownEvent {
+                                remaining: 0,
+                                task_ids: Vec::new(),
+                            },
+                        );
+                    }
+
+                    for id in tm.pending_auto_run_ids() {
                         let Some(task) = tm.tasks.lock().unwrap().get(&id).cloned() else {
                             continue;
                         };
@@ -1713,6 +1955,10 @@ pub fn run() {
             delete_task,
             start_task,
             stop_task,
+            cancel_auto_run,
+            cancel_all_auto_run,
+            stop_all,
+            get_auto_run_countdown,
             get_task_log,
             clear_task_log,
             get_setting_silent_start,
@@ -1724,11 +1970,44 @@ pub fn run() {
             get_running_task_ids,
             quit_app
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
 // ==================== 测试 ====================
+
+#[cfg(test)]
+#[test]
+fn shared_data_dir_always_points_to_release_identifier() {
+    // 开发包（identifier 带 .dev 后缀）：替换回正式包目录
+    let dev = PathBuf::from("/root/com.winservermanager.app.dev");
+    assert_eq!(
+        shared_data_dir_from(dev),
+        PathBuf::from("/root/com.winservermanager.app")
+    );
+    // 正式包：原样返回
+    let release = PathBuf::from("C:/Users/x/AppData/Roaming/com.winservermanager.app");
+    assert_eq!(shared_data_dir_from(release.clone()), release);
+}
+
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+fn instance_lock_is_exclusive_until_released() {
+    let dir = std::env::temp_dir().join("wsm-instance-lock-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 第一个实例拿到锁
+    let first = acquire_instance_lock(&dir);
+    assert!(first.is_some());
+    // 第二个实例（模拟开发包与正式包并存）拿不到
+    assert!(acquire_instance_lock(&dir).is_none());
+    // 第一个实例退出释放后，锁可以被重新取得
+    drop(first);
+    assert!(acquire_instance_lock(&dir).is_some());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 #[cfg(all(test, target_os = "windows"))]
 #[test]

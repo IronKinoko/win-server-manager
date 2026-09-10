@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { TaskInfo, TaskStatus } from '../types'
 import { IS_MAC } from '../platform'
-import { IconGear, IconMore, IconPlus, IconPower } from './icons'
+import { IconGear, IconMore, IconPlus, IconPower, IconStop, IconTimer } from './icons'
 
 function statusCls(s: TaskStatus) {
   switch (s) {
@@ -25,6 +25,14 @@ interface SidebarProps {
   // 是否开启「允许后台继续运行」：开启时左下角显示「完全退出」按钮
   keepAlive: boolean
   onQuit: () => void
+  // 自动运行倒计时：taskId -> 剩余秒数（有值时任务行右侧展示倒计时按钮）
+  autoRunCountdowns: Record<string, number>
+  onCancelAutoRun: (id: string) => void
+  // 批量取消本次自动启动：倒计时期间左下角展示按钮，点击后不再拉起任何待启动任务
+  onCancelAllAutoRun: () => void
+  // 运行中的任务数与批量停止入口（多于 1 个服务在跑时左下角展示「全部停止」）
+  runningCount: number
+  onStopAll: () => void
   // 侧边栏宽度（px，由 App 持久化）与右边缘拖拽调整入口
   width: number
   onResizeStart: (e: React.PointerEvent) => void
@@ -40,11 +48,21 @@ export default function Sidebar({
   onOpenSettings,
   keepAlive,
   onQuit,
+  autoRunCountdowns,
+  onCancelAutoRun,
+  onCancelAllAutoRun,
+  runningCount,
+  onStopAll,
   width,
   onResizeStart,
 }: SidebarProps) {
   // 同一时刻最多展开一个任务的 "···" 菜单
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
+
+  // 仍在自动启动倒计时的任务数（>0 时左下角显示「全部取消自动启动」按钮）
+  const autoRunCount = Object.values(autoRunCountdowns).filter((s) => s > 0).length
+  // 多于一个服务在活动时才需要批量停止（只有一个时任务行/详情栏的停止按钮已足够）
+  const showStopAll = runningCount > 1
 
   // 点击菜单外部（含空白处、其他任务项）时关闭菜单
   useEffect(() => {
@@ -92,6 +110,7 @@ export default function Sidebar({
         {sorted.map((t) => {
           const si = statusCls(t.status)
           const menuOpen = menuOpenId === t.task.id
+          const countdown = autoRunCountdowns[t.task.id] ?? 0
           return (
             <li
               key={t.task.id}
@@ -104,15 +123,33 @@ export default function Sidebar({
               <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
                 {t.task.name}
               </span>
-              {/* 状态标签与 ⋯ 按钮共用同一槽位（宽度随文字自适应）：默认显示状态，hover 时隐藏状态并原位显示 ⋯ */}
+              {/* 行尾槽位：运行状态 / 自动启动倒计时 / ⋯ 按钮共用同一位置（各自绝对定位到右端，
+                  避免不同内容把左侧任务名挤得左右跳动）。三层优先级（高 → 低）：
+                  hover 显示「更多」> 倒计时 > 运行状态 */}
               <span className="relative shrink-0 h-6 flex items-center">
                 <span
                   className={`block text-xs whitespace-nowrap ${si.label} ${
-                    menuOpen ? 'invisible' : 'group-hover:invisible'
+                    menuOpen || countdown > 0 ? 'invisible' : 'group-hover:invisible'
                   }`}
                 >
                   {si.text}
                 </span>
+                {countdown > 0 && (
+                  <button
+                    className={`absolute right-0 top-1/2 -translate-y-1/2 h-6 px-2 flex items-center text-xs rounded border border-accent/60 bg-accent/15 text-accent tabular-nums cursor-pointer transition-colors hover:bg-accent/30 hover:border-accent ${
+                      menuOpen
+                        ? 'invisible pointer-events-none'
+                        : 'group-hover:invisible group-hover:pointer-events-none'
+                    }`}
+                    title="点击取消本次自动启动"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onCancelAutoRun(t.task.id)
+                    }}
+                  >
+                    {countdown}s
+                  </button>
+                )}
                 <button
                   data-task-menu
                   className={`absolute right-0 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-fg-muted cursor-pointer transition-opacity hover:bg-white/10 hover:text-fg ${
@@ -160,6 +197,28 @@ export default function Sidebar({
         {tasks.length === 0 && <li className="text-fg-muted text-center py-6 text-sm">暂无任务</li>}
       </ul>
       <div className="px-3 py-3 border-t border-line shrink-0 flex flex-col gap-2">
+        {/* 自动启动倒计时期间才出现：一次关停全部待启动任务 */}
+        {autoRunCount > 0 && (
+          <button
+            className="btn-countdown w-full text-left flex items-center gap-1.5 leading-none tabular-nums"
+            title="取消本次自动启动，所有倒计时中的任务都不会被拉起"
+            onClick={onCancelAllAutoRun}
+          >
+            <IconTimer className="w-4 h-4 shrink-0" />
+            全部取消自动启动（{autoRunCount}）
+          </button>
+        )}
+        {/* 有多个服务在运行时才出现：一次停掉全部（与单独停止走同一套后端清理逻辑） */}
+        {showStopAll && (
+          <button
+            className="btn-stop w-full text-left flex items-center gap-1.5 leading-none"
+            title="停止所有正在运行的服务"
+            onClick={onStopAll}
+          >
+            <IconStop className="w-4 h-4 shrink-0" />
+            全部停止（{runningCount}）
+          </button>
+        )}
         <button
           className="btn-base w-full text-left flex items-center gap-1.5 leading-none"
           onClick={onOpenSettings}

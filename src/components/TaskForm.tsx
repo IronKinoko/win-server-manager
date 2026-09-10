@@ -144,7 +144,10 @@ export default function TaskForm({ form, onChange, onBlur, onBrowseDir }: TaskFo
               <span className="switch-slider" />
             </label>
           </div>
-          <div className="flex flex-1 items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3">
+          <div
+            className="flex flex-1 items-center justify-between rounded-md bg-input-bg/50 border border-line px-3 py-3"
+            title="应用启动后先倒计时 10 秒（按钮上展示剩余秒数，可随时取消），归零后自动运行"
+          >
             <span className="text-sm text-fg">应用启动时自动运行</span>
             <label className="switch">
               <input

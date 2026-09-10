@@ -43,6 +43,8 @@
 - Windows 进程命令使用隐藏控制台创建标志，并通过 `taskkill` 清理进程树；平台相关代码应继续放在现有条件编译块中。
 - 不要手动修改 `src-tauri/gen` 下的生成文件或 `src-tauri/target` 下的构建产物。
 - Tauri capability 修改会影响本地系统访问。新增插件命令时，只授予必要权限，并同步更新 `src-tauri/capabilities/default.json`。
+- 开发包与正式包的 identifier 必须不同：`tauri::is_dev()` 为真时在 `run()` 里给 identifier 追加 `.dev` 后缀（`DEV_IDENTIFIER_SUFFIX`），否则单实例插件会让 `pnpm tauri dev` 与已安装的正式包互相顶掉。`tauri.conf.json` 里的 identifier 只代表正式包。
+- 开发包与正式包共用同一份数据目录：数据目录统一固定为正式包 identifier 对应的目录（`shared_data_dir` / `RELEASE_IDENTIFIER`，改这个值等于迁移用户数据）。启动时用共享数据目录下的 `instance.lock` 判断是否已有实例在运行（跨开发/正式包），已有实例则不自动运行任务。
 - 在 Windows 上，如果 `pnpm tauri dev` 无法绑定端口，先检查端口 `1420` 是否已被其他进程占用，再考虑修改配置端口。
 
 ## 修改与验证流程

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { Task, TaskInfo, OutputEvent, StatusEvent } from './types'
+import type { Task, TaskInfo, OutputEvent, StatusEvent, AutoRunCountdownEvent } from './types'
 import Sidebar from './components/Sidebar'
 import TaskForm from './components/TaskForm'
 import ControlBar from './components/ControlBar'
@@ -23,6 +23,8 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState<TaskInfo | null>(null)
   // 是否允许后台继续运行：开启时侧边栏左下角显示「完全退出」按钮
   const [keepAlive, setKeepAlive] = useState(false)
+  // 自动运行倒计时：taskId -> 剩余秒数（后端每秒广播，倒计时结束或被取消后移除）
+  const [autoRunCountdowns, setAutoRunCountdowns] = useState<Record<string, number>>({})
   const outputRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<SettingsModalHandle>(null)
 
@@ -149,6 +151,14 @@ function App() {
       setOutputs((prev) => ({ ...prev, [task_id]: [] }))
     }).then(track)
 
+    // 自动运行倒计时：后端每秒广播一次，直接用最新一批待启动任务覆盖本地倒计时，
+    // 任务被取消 / 删除 / 已启动后会在下一轮事件里自动消失
+    listen<AutoRunCountdownEvent>('auto-run-countdown', (event) => {
+      if (cancelled) return
+      const { remaining, task_ids } = event.payload
+      setAutoRunCountdowns(Object.fromEntries(task_ids.map((id) => [id, remaining])))
+    }).then(track)
+
     return () => {
       cancelled = true
       unlisteners.forEach((fn) => fn())
@@ -161,6 +171,55 @@ function App() {
       .then(setKeepAlive)
       .catch(() => {})
   }, [])
+
+  // 后端在应用启动瞬间就开始倒计时并广播事件，可能早于界面挂载；
+  // 这里主动补查一次当前状态，保证按钮上从正确秒数开始显示
+  useEffect(() => {
+    let cancelled = false
+    invoke<AutoRunCountdownEvent>('get_auto_run_countdown')
+      .then((state) => {
+        if (cancelled || state.task_ids.length === 0) return
+        // 取较小值：查询是异步的，可能晚于后一轮倒计时事件到达，避免秒数回跳
+        setAutoRunCountdowns((prev) => {
+          const next = { ...prev }
+          for (const id of state.task_ids) {
+            const cur = next[id]
+            next[id] = cur === undefined ? state.remaining : Math.min(cur, state.remaining)
+          }
+          return next
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 取消某任务本次自动启动：本地立即收起倒计时，同时通知后端在倒计时归零时跳过该任务
+  const cancelAutoRun = useCallback((id: string) => {
+    setAutoRunCountdowns((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    invoke('cancel_auto_run', { id }).catch(() => {})
+  }, [])
+
+  // 批量取消本次自动启动（侧边栏左下角按钮）：倒计时期间所有待启动任务一并跳过
+  const cancelAllAutoRun = useCallback(() => {
+    setAutoRunCountdowns({})
+    invoke('cancel_all_auto_run').catch(() => {})
+  }, [])
+
+  // 全部停止（侧边栏左下角按钮）：一次停掉所有运行中的任务，后端逐个发 task-status
+  const stopAll = useCallback(async () => {
+    await invoke('stop_all').catch(() => {})
+    await refreshTasks()
+  }, [refreshTasks])
+
+  // 运行中的任务数（>1 时左下角显示「全部停止」按钮）
+  const runningCount = tasks.filter((t) => t.status === 'running').length
 
   const selectTask = async (id: string) => {
     // 切走已停止的任务时顺手清掉它的日志（内存 + 磁盘）
@@ -321,6 +380,11 @@ function App() {
         onOpenSettings={() => settingsRef.current?.open()}
         keepAlive={keepAlive}
         onQuit={() => invoke('quit_app')}
+        autoRunCountdowns={autoRunCountdowns}
+        onCancelAutoRun={cancelAutoRun}
+        onCancelAllAutoRun={cancelAllAutoRun}
+        runningCount={runningCount}
+        onStopAll={stopAll}
         width={sidebarWidth}
         onResizeStart={handleSidebarResizeStart}
       />
@@ -342,6 +406,8 @@ function App() {
               status={selected.status}
               pid={selected.pid}
               terminalHeight={terminalHeight}
+              autoRunCountdown={autoRunCountdowns[selected.task.id] ?? 0}
+              onCancelAutoRun={() => cancelAutoRun(selected.task.id)}
               onStart={handleStart}
               onStop={handleStop}
               onClearLog={handleClearLog}

@@ -31,3 +31,10 @@ export interface StatusEvent {
   task_id: string
   status: TaskStatus
 }
+
+// 自动运行倒计时事件：应用启动后每秒广播一次（remaining 10→1），
+// remaining 为 0 表示倒计时结束，界面据此收起倒计时
+export interface AutoRunCountdownEvent {
+  remaining: number
+  task_ids: string[]
+}

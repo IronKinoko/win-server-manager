@@ -1,5 +1,5 @@
 import type { TaskStatus } from '../types'
-import { IconExpand, IconPlay, IconStop } from './icons'
+import { IconExpand, IconPlay, IconStop, IconTimer } from './icons'
 
 function statusInfo(s: TaskStatus) {
   switch (s) {
@@ -16,6 +16,9 @@ interface ControlBarProps {
   status: TaskStatus
   pid: number | null
   terminalHeight: number
+  // 「应用启动时自动运行」的剩余秒数（0 表示没有倒计时）
+  autoRunCountdown: number
+  onCancelAutoRun: () => void
   onStart: () => void
   onStop: () => void
   onClearLog: () => void
@@ -26,18 +29,31 @@ export default function ControlBar({
   status,
   pid,
   terminalHeight,
+  autoRunCountdown,
+  onCancelAutoRun,
   onStart,
   onStop,
   onClearLog,
   onToggleHeight,
 }: ControlBarProps) {
   const si = statusInfo(status)
+  // 倒计时期间按钮改为展示剩余秒数，点击即取消本次自动启动
+  const countingDown = status !== 'running' && autoRunCountdown > 0
   return (
     <div className="flex items-center gap-3 px-5 py-3 border-b border-line shrink-0">
       {status === 'running' ? (
         <button className="btn-stop flex items-center gap-1.5 leading-none" onClick={onStop}>
           <IconStop className="w-4 h-4 shrink-0" />
           停止 (PID {pid})
+        </button>
+      ) : countingDown ? (
+        <button
+          className="btn-countdown flex items-center gap-1.5 leading-none tabular-nums"
+          title="点击取消本次自动启动"
+          onClick={onCancelAutoRun}
+        >
+          <IconTimer className="w-4 h-4 shrink-0" />
+          {autoRunCountdown}s 后自动启动（点击取消）
         </button>
       ) : (
         <button className="btn-start flex items-center gap-1.5 leading-none" onClick={onStart}>

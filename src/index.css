@@ -65,6 +65,11 @@
   .btn-stop {
     @apply bg-danger border-danger text-white font-semibold rounded-md px-4 h-9 text-sm cursor-pointer transition-colors hover:bg-red-600 disabled:opacity-45 disabled:cursor-not-allowed;
   }
+
+  /* 自动运行倒计时按钮：展示剩余秒数，点击取消本次自动启动 */
+  .btn-countdown {
+    @apply bg-accent/20 border-accent/60 text-accent rounded-md px-4 h-9 text-sm font-semibold cursor-pointer transition-colors hover:bg-accent/35 hover:border-accent disabled:opacity-45 disabled:cursor-not-allowed;
+  }
 }
 
 /* ==================== Toggle Switch（伪元素无法用 utility 实现）==================== */

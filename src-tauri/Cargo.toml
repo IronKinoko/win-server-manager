@@ -32,3 +32,7 @@ fast-strip-ansi = "0.13.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+# 实例锁：Unix 侧用 flock 独占锁文件（Windows 侧用 std 的 share_mode(0)，无需额外依赖）
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

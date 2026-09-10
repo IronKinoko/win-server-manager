@@ -4473,6 +4473,7 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "fast-strip-ansi",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

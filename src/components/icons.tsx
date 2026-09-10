@@ -71,6 +71,17 @@ export function IconMore(props: IconProps) {
   )
 }
 
+/** 计时（自动运行倒计时） */
+export function IconTimer(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="13.5" r="8" />
+      <path d="M12 10v3.5l2.5 2" />
+      <path d="M9.5 2.5h5" />
+    </Svg>
+  )
+}
+
 /** 展开/收起（⇕） */
 export function IconExpand(props: IconProps) {
   return (
