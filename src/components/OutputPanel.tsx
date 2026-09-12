@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { compilePretty, prettyLines, type PrettyFn } from '../prettyOutput'
 
 /** 一行输出（来源 + 原始文本，保留后端发来的 ANSI 序列） */
@@ -103,11 +105,17 @@ function OutputPanel({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
         const selection = terminal.getSelection()
         if (!selection) return true
-        void navigator.clipboard.writeText(selection)
+        navigator.clipboard.writeText(selection)
         return false
       }
       return true
     })
+    // 链接改为按住 Ctrl（macOS 为 Cmd）再点击才打开，避免浏览输出时误触外链
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      openUrl(uri).catch(() => {})
+    })
+    terminal.loadAddon(webLinksAddon)
     terminal.onScroll(() => {
       nearBottomRef.current = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY
     })
@@ -116,6 +124,7 @@ function OutputPanel({
     return () => {
       terminalRef.current = null
       writtenLineCountRef.current = 0
+      webLinksAddon.dispose()
       resizeObserver.disconnect()
       terminal.dispose()
     }
